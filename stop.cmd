@@ -1,7 +1,10 @@
 @echo off
-echo Arresto Marco AI Team sulla porta 3210...
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":3210" ^| findstr "LISTENING"') do (
-  taskkill /PID %%P /F >nul 2>&1
+setlocal
+cd /d "%~dp0"
+where node >nul 2>&1
+if errorlevel 1 (
+  echo ERRORE: Node.js non trovato nel PATH.
+  exit /b 2
 )
-echo Fatto.
-pause
+node "%~dp0background-launcher.js" --stop
+exit /b %errorlevel%

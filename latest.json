@@ -1,30 +1,30 @@
 {
-  "version": "3.3.11",
-  "notes": "Marco AI Team v3.3.11 pubblicata dall'Agente Sviluppo locale.",
+  "version": "3.3.13",
+  "notes": "Marco AI Team v3.3.13 pubblicata dall'Agente Sviluppo locale.",
   "files": [
     {
       "path": "server.js",
-      "sha256": "3e4d9c70df96d5e197f405d95e31a0603998df83f6c01e0a6c308644d09b2fb7",
+      "sha256": "968b84f2d44f646e2f247b31fca01bcfcdccf7229e3aedc0433d8700e6b99351",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/server.js"
     },
     {
       "path": "updater.js",
-      "sha256": "dcec85613b9c3c64f2583d3e9505c002aa83913c4f095267c96aa9fdbf7b1e1f",
+      "sha256": "40a42bfb263bdebf5b364545d19f4fa0f873b82e441395638ea0995f16b19fac",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/updater.js"
     },
     {
       "path": "public/index.html",
-      "sha256": "f4d9f03276217071c3eb04dbe0254e1ca32c2c14185afd80881dba3423aecd6e",
+      "sha256": "df928880f6eeda5e2468237a951d3c339fbba3840805a318f5294f7945e60167",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/public/index.html"
     },
     {
       "path": "start.cmd",
-      "sha256": "ed8909ccc71df2f94d6cef5474f9c76276087ca7ea83830157b4d2aec6b82d9e",
+      "sha256": "46224f55197a9eb6f31b964ff259d196842f2ea5b112e2326692a3bae88bb31a",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/start.cmd"
     },
     {
       "path": "stop.cmd",
-      "sha256": "2c55c38a3485bd2b40c2dc2e758e1f897aed9ad75378ec14faa856230654f552",
+      "sha256": "863ecdea6e1bb5ee05842754539a83593fc19d0b94be9a8a89aa695ec8f9ee7d",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/stop.cmd"
     },
     {
@@ -38,8 +38,23 @@
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/setup-github.cmd"
     },
     {
+      "path": "background-launcher.js",
+      "sha256": "e365c1b227cf52b884466f020365347dd39ae61d7686db7e2951f26b96aad255",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/background-launcher.js"
+    },
+    {
+      "path": "setup-autostart.cmd",
+      "sha256": "1e7c69438bcfc45d2e0831eef79e33a86c20ed69426860925b45e44230f7755f",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/setup-autostart.cmd"
+    },
+    {
+      "path": "disable-autostart.cmd",
+      "sha256": "a3b47307f6eef878ef7ad994efe835c8610dce2121691be0ca0a6157c9bad764",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/disable-autostart.cmd"
+    },
+    {
       "path": "README.md",
-      "sha256": "226551645278a3204c7b8d6d2e2ab188404673008fb59e9f76d73e4266ae613b",
+      "sha256": "0b70c695805edb12f80069856ccd07472a52f944af0e7cd97c9f58d430b206b0",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/README.md"
     },
     {

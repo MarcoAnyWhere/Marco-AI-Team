@@ -5,9 +5,10 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.11";
+const VERSION = "3.3.13";
+const RESTART_INSTANCE = process.env.MARCO_RESTART_INSTANCE || crypto.randomUUID();
 const ROOT = __dirname;
-const PORT = Number(process.env.PORT || 3210);
+const PORT = 3210;
 const PUBLIC = path.join(ROOT, "public");
 const HISTORY = path.join(ROOT, "data", "history.jsonl");
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3:1.7b";
@@ -17,7 +18,7 @@ const UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/MarcoAnyWhere/Mar
 const DEV_DIR = path.join(ROOT, ".dev-work");
 const GITHUB_REPO = "MarcoAnyWhere/Marco-AI-Team";
 const GITHUB_CLONE_URL = "https://github.com/MarcoAnyWhere/Marco-AI-Team.git";
-// Future autostart files are optional until v3.3.12; missing files are skipped.
+// Application files shared by staging, manifests, publishing and updates.
 const DEV_FILES = ["server.js","updater.js","public/index.html","start.cmd","stop.cmd","setup-local-model.cmd","setup-github.cmd","background-launcher.js","setup-autostart.cmd","disable-autostart.cmd","README.md",".gitignore"];
 
 const SYSTEM_CONTEXT = `CONTESTO REALE DI MARCO AI TEAM:
@@ -204,7 +205,7 @@ function forceStageVersion(stage, newVersion) {
 }
 
 async function validateDevStage(stage) {
-  for (const rel of ["server.js", "updater.js"]) {
+  for (const rel of ["server.js", "updater.js", "background-launcher.js"]) {
     const f = path.join(stage, rel);
     if (fs.existsSync(f)) {
       runEvent('Validazione '+rel,'Validazione '+rel,'info',90);
@@ -222,7 +223,7 @@ async function validateDevStage(stage) {
     new Function(match[1]);
   }
 
-  const required = ["server.js","public/index.html","start.cmd","updater.js"];
+  const required = ["server.js","public/index.html","start.cmd","updater.js","background-launcher.js","setup-autostart.cmd","disable-autostart.cmd"];
   for (const rel of required) {
     if (!fs.existsSync(path.join(stage, rel))) throw new Error(`File fondamentale mancante nello staging: ${rel}`);
   }
@@ -1503,6 +1504,7 @@ async function chatOperation(task,mode,agent) {
 
 const server = http.createServer(async (req, res) => {
   try {
+    if(req.url==='/api/restart-status' && req.method==='GET'){res.setHeader('Cache-Control','no-store');return sendJson(res,200,{version:VERSION,instance:RESTART_INSTANCE});}
     const runMatch=req.url.match(/^\/api\/runs\/([0-9a-f-]+)(\/events)?$/i);
     if(req.method==='GET' && runMatch) {
       const job=loadRun(runMatch[1]);if(!job)return sendJson(res,404,{error:'Job non trovato'});
@@ -1512,6 +1514,7 @@ const server = http.createServer(async (req, res) => {
       if(job.status!=='running'){res.end();return;}
       const timer=setInterval(()=>{emit();if((loadRun(runMatch[1])||job).status!=='running'){clearInterval(timer);res.end();}},3000);req.on('close',()=>clearInterval(timer));return;
     }
+    if(req.url==='/api/autostart/status' && req.method==='GET'){res.setHeader('Cache-Control','no-store');return sendJson(res,200,{status:require('./background-launcher.js').status()});}
     if(req.url==='/api/remote/state' && req.method==='GET'){res.setHeader('Cache-Control','no-store');return sendJson(res,200,remoteUiState());}
     if(req.url==='/api/remote/config' && req.method==='GET')return sendJson(res,200,{...remoteConfig,...remoteState,version:VERSION});
     if(req.url==='/api/remote/config' && req.method==='POST') {

@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.11
+3.3.13
 
 ## Agenti
 - Generale
@@ -118,8 +118,15 @@ Superati node --check server.js, node --check updater.js e parsing degli script 
 Restano da verificare sul PC operativo: rendering UI nel browser, Drive Desktop, esecuzione delle CLI autenticate e riavvio Windows reale. Le fixture verificano il protocollo e la logica senza eseguire queste operazioni.
 
 
-## v3.3.11 — Prerequisito per autostart
+## v3.3.12 — Prerequisito per autostart
 
 La whitelist `DEV_FILES` include preventivamente `background-launcher.js`, `setup-autostart.cmd` e `disable-autostart.cmd`. I file assenti vengono ignorati da staging, rilevamento modifiche, copia e manifest di pubblicazione. Questa patch non crea questi file e non implementa autostart Windows.
 
-Applicare e riavviare la 3.3.11 prima di preparare la successiva 3.3.12: il server corrente usa la propria whitelist per rilevare e applicare i file dello staging. L’autostart completo andrà implementato nella 3.3.12. Nessun fallback pay-per-use introdotto.
+Applicare e riavviare la 3.3.12 prima di preparare la successiva 3.3.12: il server corrente usa la propria whitelist per rilevare e applicare i file dello staging. L’autostart completo andrà implementato nella 3.3.12. Nessun fallback pay-per-use introdotto.
+
+## Avvio automatico Windows
+Dalla cartella definitiva dell’app eseguire `setup-autostart.cmd`, senza amministratore. Crea un unico `Marco-AI-Team.vbs` nella Startup personale; ripetere aggiorna lo stesso elemento. Node deve essere nel PATH al setup. Windows Script Host deve essere abilitato: lo script ne verifica la disponibilità prima di configurare Startup.
+
+`disable-autostart.cmd` rimuove solo l’elemento riconosciuto, anche se già assente; non ferma il server. `start.cmd` resta diagnostico e apre il browser se la porta locale è già attiva; `stop.cmd` arresta solo il processo Node identificato tramite percorso assoluto di server.js e porta locale. Processi non identificabili restano attivi.
+
+Il launcher non apre il browser, usa 127.0.0.1:3210 e non arresta istanze esistenti. Apply riavvia tramite lo stesso launcher nascosto. La UI mostra lo stato della configurazione Startup, non garantisce che Windows esegua l’elemento (ad esempio se disabilitato in Gestione attività). Dopo spostamento dell’app o reinstallazione di Node, rieseguire il setup. Nessun servizio o API aggiuntivi.

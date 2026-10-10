@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 const crypto = require('crypto');
+const net = require('net');
 function writeAtomic(file,value) {
   const tmp=file+'.'+crypto.randomUUID()+'.tmp';
   try {fs.writeFileSync(tmp,JSON.stringify(value,null,2),{flag:'wx'});fs.renameSync(tmp,file);} finally {try {if(fs.existsSync(tmp))fs.unlinkSync(tmp);} catch {}}
@@ -28,6 +29,42 @@ function applyEvent(phase,progress,status='running',message=phase) {
     }
   } catch {}
 }
+function probe() {
+  return new Promise((resolve, reject) => {
+    const s = net.connect({host:'127.0.0.1',port:3210});
+    s.setTimeout(2000);
+    s.once('connect',()=>{s.destroy();resolve(true);});
+    s.once('timeout',()=>{s.destroy();reject(new Error('Verifica porta 3210 scaduta'));});
+    s.once('error',e=>{s.destroy();if(e.code==='ECONNREFUSED')resolve(false);else reject(e);});
+  });
+}
+
+// Apply waits for both the old PID and the listener to disappear; never kills a port owner.
+async function waitForShutdown(pid, deps={}) {
+  const check=deps.probe||probe;
+  const alive=deps.alive||(pid=>{try{process.kill(Number(pid),0);return true;}catch(e){if(e.code==='ESRCH')return false;throw e;}});
+  const pause=deps.sleep||(ms=>new Promise(r=>setTimeout(r,ms)));
+  if(!Number.isInteger(Number(pid))||Number(pid)<=0)throw new Error('PID precedente non valido: riavvio annullato');
+  for(let i=0;i<120;i++) {
+    if(!alive(pid) && !(await check()))return;
+    await pause(250);
+  }
+  throw new Error('Riavvio annullato: vecchio server ancora attivo o porta 127.0.0.1:3210 occupata da un processo non identificato; nessun processo arrestato');
+}
+async function waitForInstance(version, instance, deps={}) {
+  const request=deps.fetch||fetch;
+  const pause=deps.sleep||(ms=>new Promise(r=>setTimeout(r,ms)));
+  for(let i=0;i<30;i++) {
+    try {
+      const r=await request('http://127.0.0.1:3210/api/restart-status',{signal:AbortSignal.timeout(1500),cache:'no-store'});
+      const x=r.ok?await r.json():null;
+      if(x?.version===version && x?.instance===instance)return;
+    } catch {}
+    await pause(1000);
+  }
+  throw new Error('Nuova istanza non confermata: versione attesa '+version+' non disponibile entro il timeout di riavvio');
+}
+
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function alive(pid) {
   try { process.kill(Number(pid), 0); return true; } catch { return false; }
@@ -42,8 +79,10 @@ function safe(rel) {
 
 (async () => {
   try {
-    for (let i = 0; i < 40 && alive(parentPid); i++) await sleep(250);
-    await sleep(400);
+    applyManifest=JSON.parse(fs.readFileSync(path.join(staging,"manifest.json"),"utf8"));
+    applyEvent("Arresto vecchia istanza",5);
+    await waitForShutdown(parentPid);
+    const restartInstance=crypto.randomUUID();
 
     const manifest = JSON.parse(fs.readFileSync(path.join(staging, "manifest.json"), "utf8"));
     applyManifest=manifest;applyEvent('Backup',15);
@@ -81,8 +120,9 @@ function safe(rel) {
       };
       logRestart(`Tentativo: ${new Date().toISOString()}`);
       try {
-        const p = spawn("cmd.exe", ["/d", "/s", "/c", "call start.cmd"], {
-          cwd: root, detached: true, windowsHide: false, stdio: "ignore"
+        const p = spawn(process.execPath, [path.join(root, "background-launcher.js")], {
+          cwd: root, detached: true, windowsHide: true, stdio: "ignore",
+          env:{...process.env,PORT:"3210",MARCO_RESTART_INSTANCE:restartInstance}
         });
         await new Promise((resolve, reject) => {
           p.once("error", reject);
@@ -97,17 +137,13 @@ function safe(rel) {
         throw e;
       }
     } else {
-      const p = spawn("node", ["server.js"], { cwd: root, detached: true, stdio: "ignore" });
+      const p = spawn(process.execPath, ["server.js"], { cwd: root, detached: true, stdio: "ignore", env:{...process.env,PORT:"3210",MARCO_RESTART_INSTANCE:restartInstance} });
       p.unref();
     }
-    let available=false;
-    for(let attempt=0;attempt<20;attempt++) {
-      try {const response=await fetch('http://127.0.0.1:'+(process.env.PORT||3210)+'/api/remote/config',{signal:AbortSignal.timeout(1500)});if(response.ok && (await response.json()).version===manifest.version){available=true;break;}} catch {}
-      await sleep(1000);
-    }
-    applyEvent(available?'Server disponibile · completamento':'Server non disponibile',available?100:80,available?'completed':'error');
+    await waitForInstance(manifest.version,restartInstance);
+    applyEvent('Server disponibile · completamento',100,'completed','Nuova istanza verificata: '+manifest.version);
   } catch (e) {
-    applyEvent('Apply fallito',0,'error');
+    applyEvent('Apply fallito',0,'error',e.message);
     try { fs.writeFileSync(path.join(root, ".update-error.txt"), `${new Date().toISOString()}\n${e.stack || e.message}\n`); } catch {}
     process.exit(1);
   }
