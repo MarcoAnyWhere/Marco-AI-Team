@@ -58,6 +58,7 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
     <button class="secondary workTpl" data-tpl="Confronta queste offerte rispetto al mio profilo e dammi una graduatoria motivata, considerando fit, seniority, sede, RAL e probabilità realistica.\n\nINCOLLA QUI LE OFFERTE:\n">Confronta offerte</button>
     <button class="secondary workTpl" data-tpl="Adatta il mio CV a questa job description senza inventare esperienze o competenze. Indicami prima le modifiche raccomandate e poi proponi il testo ottimizzato delle sezioni da cambiare.\n\nJOB DESCRIPTION:\n">Adatta CV</button>
     <button class="secondary workTpl" data-tpl="Prepara una lettera di presentazione mirata per questa posizione usando solo esperienze reali del mio profilo.\n\nJOB DESCRIPTION:\n">Lettera mirata</button>
+    <button class="secondary" id="liveSearch">🔎 Cerca offerte live</button><label><input type="checkbox" id="forceJobs"> Aggiorna feed</label>
     <button class="secondary" id="editWorkProfile">Profilo lavoro</button>
   </div>
   <div id="devTools" class="row hidden">
@@ -68,6 +69,14 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
   </div>
 </div>
 
+<div class="box hidden" id="liveJobsBox" style="margin-top:14px">
+  <b>Offerte live</b><div id="jobsSummary" class="muted" role="status"></div>
+  <div class="row"><label><input type="checkbox" id="onlyNewJobs"> Solo nuove</label>
+  <label>Minimo FIT <input id="minJobFit" type="number" min="0" max="100" value="0" style="width:65px"></label>
+  <select id="jobSource"><option value="">Tutte le fonti</option><option>Arbeitnow</option><option>Jobicy</option><option>Remotive</option></select>
+  <input id="jobQuery" placeholder="Cerca nelle offerte" aria-label="Ricerca testuale locale"></div>
+  <div id="jobCards"></div><details><summary>Trace ricerca live</summary><div id="jobsTrace"></div></details>
+</div>
 <div class="box hidden" id="workProfileBox" style="margin-top:14px">
   <b>Profilo Agente Lavoro</b>
   <div class="muted">È il contesto persistente usato per valutare offerte e materiali. Modificalo solo se cambia il tuo profilo o i criteri.</div>
@@ -158,10 +167,40 @@ $("#downloadReport").onclick=()=>{
 };
 
 
+
+let liveJobs=[];
+function showJobReport(x) {
+  liveJobs=x.jobs;
+  $('#liveJobsBox').classList.remove('hidden');
+  $('#jobsSummary').textContent=x.totalFound+' offerte trovate · '+x.newCount+' nuove · aggiornamento '+new Date(x.updatedAt).toLocaleString()+' · '+Object.entries(x.sources).map(([s,v])=>s+': '+(v.ok?'riuscita'+(v.cached?' (cache)':''):'fallita')).join(' · ');
+  $('#jobsTrace').innerHTML=x.trace.map(t=>'<pre>'+esc(t.agent)+' — '+esc(t.status)+'\n'+esc(t.result)+'</pre>').join('');
+  renderLiveJobs();
+}
+function renderLiveJobs() {
+  const query=$('#jobQuery').value.toLowerCase(), min=Number($('#minJobFit').value)||0;
+  const rows=liveJobs.filter(j=>(!$('#onlyNewJobs').checked||j.isNew)&&j.fit>=min&&(!$('#jobSource').value||j.source===$('#jobSource').value)&&[j.title,j.company,j.location,j.description].join(' ').toLowerCase().includes(query));
+  $('#jobCards').innerHTML=rows.length?rows.map(j=>'<div class="card" style="margin-top:10px;'+(j.isNew?'border-color:var(--ok)':'')+'"><b>'+(j.isNew?'🆕 NUOVA · ':'')+'FIT '+esc(j.fit)+' ('+esc(j.fitKind)+') · '+esc(j.priority)+'</b><div><b>'+esc(j.title)+'</b> · '+esc(j.company)+'</div><div>'+esc(j.location)+' · Remoto: '+(j.remote?'sì':'no')+' · RAL: '+esc(j.salaryText||'non indicata')+'</div><div class="muted">Pubblicazione: '+esc(j.publishedAt?new Date(j.publishedAt).toLocaleDateString():'non indicata')+' · '+esc(j.sourceAttribution)+'</div><div>'+esc(j.motivation)+'</div>'+(j.strongPoints.length?'<div>Punti forti: '+esc(j.strongPoints.join(' · '))+'</div>':'')+(j.gaps.length?'<div>Gap: '+esc(j.gaps.join(' · '))+'</div>':'')+'<div class="row"><a href="'+esc(j.url)+'" target="_blank" rel="noopener noreferrer">Apri offerta</a><button class="secondary" data-job-id="'+esc(j.id)+'">Analizza in dettaglio</button></div></div>').join(''):'Nessuna offerta corrisponde ai filtri.';
+}
+$('#liveSearch').onclick=async()=>{
+  $('#liveSearch').disabled=true; $('#liveJobsBox').classList.remove('hidden'); $('#jobsSummary').textContent='Recupero feed e valutazione Codex in corso…';
+  try { const r=await fetch('/api/work/live-search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({forceRefresh:$('#forceJobs').checked,onlyNew:false})});const x=await r.json();if(!r.ok)throw new Error(x.error);showJobReport(x); }
+  catch(e){$('#jobsSummary').textContent='Errore: '+e.message;}
+  finally{$('#liveSearch').disabled=false;}
+};
+for(const id of ['onlyNewJobs','minJobFit','jobSource','jobQuery']) $('#'+id).oninput=renderLiveJobs;
+$('#jobCards').onclick=async event=>{
+  const button=event.target.closest('[data-job-id]');if(!button)return;
+  button.disabled=true;button.textContent='Analisi in corso…';
+  try {const r=await fetch('/api/work/live-analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:button.dataset.jobId})});const x=await r.json();if(!r.ok)throw new Error(x.error);lastRun=x;$('#answer').textContent=x.final;$('#route').textContent=' · '+x.route;$('#trace').innerHTML=x.trace.map(t=>'<pre>'+esc(t.agent)+' — '+esc(t.status)+'\n'+esc(t.result)+'</pre>').join('');$('#result').classList.remove('hidden');}
+  catch(e){$('#jobsSummary').textContent='Analisi: '+e.message;}
+  finally{button.disabled=false;button.textContent='Analizza in dettaglio';}
+};
+
 function syncAgentUI(){
   const isWork=$("#agent").value==="work";
   const isDev=$("#agent").value==="dev";
   $("#workTools").classList.toggle("hidden",!isWork);
+  $("#liveJobsBox").classList.toggle("hidden",!isWork || !liveJobs.length);
   $("#devTools").classList.toggle("hidden",!isDev);
   if(isDev){
     $("#mode").value="codex";
@@ -331,6 +370,7 @@ $("#go").onclick=async()=>{
     const x=await r.json();
     if(!r.ok)throw new Error(x.error||"Errore");
 
+    if(x.live)showJobReport(x.live);
     lastRun=x;
     pendingDevId=x.devId||null;
     $("#applyDev").classList.toggle("hidden",!pendingDevId);
