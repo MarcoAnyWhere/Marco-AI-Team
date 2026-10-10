@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.9";
+const VERSION = "3.3.10";
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT || 3210);
 const PUBLIC = path.join(ROOT, "public");
@@ -1488,6 +1488,11 @@ async function remoteTick() {
   } catch {remoteState.watcher='warning: cartella remota non accessibile';}
   finally {remoteBusy=false;}
 }
+function remoteUiState() {
+  const jobs=[...runs.values()].filter(j=>j.remoteId && j.route!=='dev-apply').sort((a,b)=>Date.parse(b.startedAt)-Date.parse(a.startedAt));
+  const active=jobs.find(j=>j.status==='running'), last=jobs[0];
+  return {enabled:remoteConfig.enabled,watcher:remoteState.watcher,lastReceived:remoteState.lastReceived,lastCompleted:remoteState.lastCompleted,activeRunId:active?.runId||null,lastRunId:last?.runId||null,activeStatus:active?'running':last?(last.status==='completed'?'completed':'failed'):null,lastFinishedAt:last && last.status!=='running'?last.updatedAt:null,activeJobCount:[...runs.values()].filter(j=>j.status==='running').length};
+}
 function scheduleRemote() {setTimeout(async()=>{await remoteTick();scheduleRemote();},Math.max(5,Math.min(60,Number(remoteConfig.pollSeconds)||10))*1000).unref();}
 async function chatOperation(task,mode,agent) {
   const started=Date.now(),result=await execute(task,mode,agent);
@@ -1506,6 +1511,7 @@ const server = http.createServer(async (req, res) => {
       if(job.status!=='running'){res.end();return;}
       const timer=setInterval(()=>{emit();if((loadRun(runMatch[1])||job).status!=='running'){clearInterval(timer);res.end();}},3000);req.on('close',()=>clearInterval(timer));return;
     }
+    if(req.url==='/api/remote/state' && req.method==='GET'){res.setHeader('Cache-Control','no-store');return sendJson(res,200,remoteUiState());}
     if(req.url==='/api/remote/config' && req.method==='GET')return sendJson(res,200,{...remoteConfig,...remoteState,version:VERSION});
     if(req.url==='/api/remote/config' && req.method==='POST') {
       const c=JSON.parse(await readBody(req)||'{}');

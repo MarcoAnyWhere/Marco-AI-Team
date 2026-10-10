@@ -377,7 +377,9 @@ $("#go").onclick=async()=>{
   catch(e){$('#busy').textContent=e.message;$('#go').disabled=false;}
 };
 
-let monitorSource=null, monitorTimer=null, monitorGeneration=0;
+let monitorSource=null, monitorTimer=null, monitorGeneration=0, monitoredRunId=null;
+const renderedRunIds=new Set();
+let localStartPending=false;
 function durationText(ms){const sec=Math.floor(ms/1000);return Math.floor(sec/60)+' min '+sec%60+' s';}
 function etaText(x){if(x.etaMaxMs==null)return 'non disponibile (storico insufficiente)';const unit=x.etaMaxMs<90000?1000:60000;return '~'+Math.max(0,Math.floor(x.etaMinMs/unit))+'-'+Math.max(1,Math.ceil(x.etaMaxMs/unit))+(unit===1000?' s':' min');}
 function renderRuntimeResult(x){
@@ -388,11 +390,11 @@ function renderRuntimeResult(x){
   $('#applyDev').classList.toggle('hidden',!pendingDevId);$('#applyDev').disabled=false;
   if(x.devId){$('#agent').value='dev';syncAgentUI();$('#devStatus').textContent='Staging pronto · '+x.nextVersion;}
   $('#answer').textContent=x.final;$('#route').textContent=' · '+x.route;
-  $('#trace').textContent='Consultare la cronologia operativa nel monitor.';$('#result').classList.remove('hidden');loadHistory().catch(()=>{});
+  $('#trace').textContent=(x.trace||[]).map(t=>t.agent+' · '+t.status+'\n'+t.result).join('\n\n')+(x.changedFiles?.length?'\n\nFile modificati: '+x.changedFiles.join(', '):'');$('#result').classList.remove('hidden');loadHistory().catch(()=>{});
 }
 function stopMonitor(){if(monitorSource)monitorSource.close();monitorSource=null;clearInterval(monitorTimer);monitorTimer=null;}
 function attachMonitor(id){
-  stopMonitor();const generation=++monitorGeneration;
+  monitoredRunId=id;stopMonitor();const generation=++monitorGeneration;
   try{localStorage.setItem('marcoActiveRunId',id);}catch{}
   const render=x=>{
     if(generation!==monitorGeneration)return;
@@ -403,19 +405,51 @@ function attachMonitor(id){
     $('#activityTime').textContent='Tempo trascorso: '+durationText(x.elapsedMs)+' · Tempo residuo stimato: '+etaText(x)+' · Affidabilità: '+({low:'bassa',medium:'media',high:'alta'}[x.etaConfidence]||'bassa');
     $('#activityLast').textContent='Ultima attività: '+(x.events.at(-1)?.message||x.message||'');
     $('#activityEvents').innerHTML=x.events.map(e=>'<div class="item">'+esc(new Date(e.at).toLocaleTimeString())+' · '+esc(e.message)+'</div>').join('');
-    if(x.status!=='running'){stopMonitor();try{localStorage.removeItem('marcoActiveRunId');}catch{}$('#go').disabled=false;$('#busy').textContent='';if(x.result)renderRuntimeResult(x.result);}
+    if(x.status!=='running'){monitoredRunId=null;stopMonitor();try{localStorage.removeItem('marcoActiveRunId');}catch{}$('#go').disabled=false;$('#busy').textContent='';showFinishedRun(x);}
   };
-  const poll=async()=>{try{const r=await fetch('/api/runs/'+id,{cache:'no-store'});if(r.status===404){stopMonitor();try{localStorage.removeItem('marcoActiveRunId');}catch{}$('#activityLast').textContent='Job non più disponibile';return;}if(!r.ok)throw new Error('Monitor non disponibile');render(await r.json());}catch{$('#activityLast').textContent='⚠ Connessione temporaneamente assente; riconnessione automatica';}};
+  const poll=async()=>{try{const r=await fetch('/api/runs/'+id,{cache:'no-store'});if(r.status===404){if(generation!==monitorGeneration)return;monitoredRunId=null;stopMonitor();try{localStorage.removeItem('marcoActiveRunId');}catch{}$('#activityLast').textContent='Job non più disponibile';return;}if(!r.ok)throw new Error('Monitor non disponibile');render(await r.json());}catch{if(generation!==monitorGeneration)return;$('#activityLast').textContent='⚠ Connessione temporaneamente assente; riconnessione automatica';}};
   poll();
-  if(window.EventSource){monitorSource=new EventSource('/api/runs/'+id+'/events');monitorSource.onmessage=e=>{try{render(JSON.parse(e.data));}catch{}};monitorSource.onerror=()=>{if(monitorSource)monitorSource.close();monitorSource=null;if(!monitorTimer)monitorTimer=setInterval(poll,5000);};}
+  if(window.EventSource){monitorSource=new EventSource('/api/runs/'+id+'/events');monitorSource.onmessage=e=>{try{render(JSON.parse(e.data));}catch{}};monitorSource.onerror=()=>{if(generation!==monitorGeneration)return;if(monitorSource)monitorSource.close();monitorSource=null;if(!monitorTimer)monitorTimer=setInterval(poll,5000);};}
   else monitorTimer=setInterval(poll,5000);
 }
-async function startBackground(url,body){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,background:true})});const x=await r.json();if(!r.ok)throw new Error(x.error||'Avvio fallito');attachMonitor(x.runId);return x;}
-async function loadRemote(){const x=await fetch('/api/remote/config').then(r=>r.json());$('#remoteEnabled').checked=x.enabled;$('#remoteFolder').value=x.folder;$('#remoteStatus').textContent='Abilitato: '+(x.enabled?'sì':'no')+' · Cartella: '+(x.folder||'non configurata')+' · Watcher: '+x.watcher+' · Ultimo ricevuto: '+(x.lastReceived||'nessuno')+' · Ultimo completato: '+(x.lastCompleted||'nessuno');}
+function showFinishedRun(job){
+  if(renderedRunIds.has(job.runId))return;
+  renderedRunIds.add(job.runId);
+  if(job.result)renderRuntimeResult(job.result);
+  else renderRuntimeResult({version:'3.3.10',at:job.updatedAt,agent:job.agent,route:job.route,elapsedMs:job.elapsedMs,task:'',mode:'',final:'ERRORE · '+(job.message||'Attività interrotta'),trace:(job.events||[]).map(e=>({agent:job.agent,status:e.type,result:e.message}))});
+  loadHistory().catch(()=>{});
+}
+async function startBackground(url,body){localStartPending=true;try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,background:true})});const x=await r.json();if(!r.ok)throw new Error(x.error||'Avvio fallito');attachMonitor(x.runId);return x;}finally{localStartPending=false;}}
+function renderRemoteState(x){$('#remoteStatus').textContent='Abilitato: '+(x.enabled?'sì':'no')+' · Watcher: '+x.watcher+' · Ultimo ricevuto: '+(x.lastReceived||'nessuno')+' · Ultimo completato: '+(x.lastCompleted||'nessuno')+((x.activeRunId&&monitoredRunId!==x.activeRunId)?' · Altra attività remota disponibile':'');}
+async function loadRemote(){const x=await fetch('/api/remote/config').then(r=>r.json());$('#remoteEnabled').checked=x.enabled;$('#remoteFolder').value=x.folder;renderRemoteState(x);}
+let remotePollBusy=false;
+const remotePageOpenedAt=Date.now();
+let seenRemoteRunId=null;
+const remoteHistoryFinished=new Set();
+async function pollRemoteState(){
+  if(remotePollBusy)return;remotePollBusy=true;
+  try{
+    const r=await fetch('/api/remote/state',{cache:'no-store'});if(!r.ok)return;
+    const x=await r.json();renderRemoteState(x);
+    if(x.lastRunId && x.lastFinishedAt && !remoteHistoryFinished.has(x.lastRunId)){remoteHistoryFinished.add(x.lastRunId);loadHistory().catch(()=>{});}
+    if(x.lastRunId && seenRemoteRunId!==x.lastRunId){seenRemoteRunId=x.lastRunId;loadHistory().catch(()=>{});}
+    if(localStartPending || monitoredRunId)return;
+    if(x.activeRunId){if(x.activeJobCount===1)attachMonitor(x.activeRunId);return;}
+    // Restore only a result completed around this page session (two-minute refresh window).
+    if(x.lastRunId && !renderedRunIds.has(x.lastRunId) && Date.parse(x.lastFinishedAt)>=remotePageOpenedAt-120000){
+      const generation=monitorGeneration;
+      const response=await fetch('/api/runs/'+x.lastRunId,{cache:'no-store'});if(!response.ok)return;
+      const job=await response.json();
+      if(!monitoredRunId&&!localStartPending&&generation===monitorGeneration&&job.status!=='running')showFinishedRun(job);
+    }
+  }finally{remotePollBusy=false;}
+}
 $('#saveRemote').onclick=async()=>{try{const r=await fetch('/api/remote/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:$('#remoteEnabled').checked,folder:$('#remoteFolder').value})});const x=await r.json();if(!r.ok)throw new Error(x.error);await loadRemote();}catch(e){$('#remoteStatus').textContent=e.message;}};
-loadRemote().catch(()=>{});setInterval(()=>{fetch('/api/remote/config').then(r=>r.json()).then(x=>{$('#remoteStatus').textContent='Abilitato: '+(x.enabled?'sì':'no')+' · Cartella: '+(x.folder||'non configurata')+' · Watcher: '+x.watcher+' · Ultimo ricevuto: '+(x.lastReceived||'nessuno')+' · Ultimo completato: '+(x.lastCompleted||'nessuno');}).catch(()=>{});},10000);
+loadRemote().catch(()=>{});
+setInterval(()=>pollRemoteState().catch(()=>{}),10000);
 try{const active=localStorage.getItem('marcoActiveRunId');if(active)attachMonitor(active);}catch{}
 
+pollRemoteState().catch(()=>{});
 loadStatus().catch(e=>$("#version").textContent=e.message);
 loadHistory().catch(()=>{});
 </script>
