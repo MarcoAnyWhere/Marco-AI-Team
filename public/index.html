@@ -139,6 +139,50 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
 
 <script>
 const $=s=>document.querySelector(s);
+// Version is stamped into HTML by the server, before any asynchronous status request.
+const PAGE_VERSION = '__MARCO_PAGE_VERSION__';
+function createVersionWatcher(pageVersion, storage, reload) {
+  let reloading = false;
+  return backend => {
+    if (!backend || !/^\d+\.\d+\.\d+$/.test(backend.version) || typeof backend.instance !== 'string') return false;
+    if (backend.version === pageVersion || reloading) return false;
+    const key = 'marco.reload.' + pageVersion + '.' + backend.version;
+    try { if (storage.getItem(key)) return false; storage.setItem(key, '1'); } catch {}
+    reloading = true;
+    reload();
+    return true;
+  };
+}
+let reloadStorage;
+try {reloadStorage=sessionStorage;} catch {reloadStorage={getItem:()=>null,setItem:()=>{}};}
+const versionWatcher = createVersionWatcher(PAGE_VERSION, reloadStorage, () => location.reload());
+let versionPolling = false, publicationRevision = 0, publicationCheckAt = 0;
+async function pollBackendVersion(force = false) {
+  if (versionPolling || (document.hidden && !force)) return;
+  versionPolling = true;
+  try {
+    const r = await fetch('/api/restart-status', {cache:'no-store', signal:AbortSignal.timeout(3500)});
+    if (!r.ok) return;
+    const backend = await r.json();
+    if (versionWatcher(backend)) return;
+    if (backend.publication?.revision && (backend.publication.revision !== publicationRevision || (Date.now()-backend.publication.revision<120000 && Date.now()-publicationCheckAt>15000))) {
+      publicationRevision = backend.publication.revision;
+      publicationCheckAt = Date.now();
+      showPublication(backend.publication);
+      checkUpdate(true);
+    }
+  } catch {} finally { versionPolling = false; }
+}
+setInterval(pollBackendVersion, 7000);
+window.addEventListener('focus', () => pollBackendVersion());
+document.addEventListener('visibilitychange', () => {if (!document.hidden) pollBackendVersion();});
+pollBackendVersion();
+function showPublication(p) {
+  if (!p?.version) return;
+  $('#updateStatus').textContent = 'Pubblicazione GitHub confermata · v' + p.version + ' · verifica propagazione manifest...';
+  $('#updateNotes').textContent = 'Confermata dal publish locale alle ' + p.confirmedAt;
+}
+
 const esc=s=>String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));
 let lastRun=null;
 
@@ -263,15 +307,7 @@ $("#applyDev").onclick=async()=>{
     if(!r.ok||!x.ok)throw new Error(x.error||"Applicazione fallita");
     if(x.runId)attachMonitor(x.runId);
     $("#devStatus").textContent=x.message||"Riavvio...";
-    let tries=0;
-    const t=setInterval(async()=>{
-      tries++;
-      try{
-        const st=await fetch("/api/status",{cache:"no-store"}).then(r=>r.json());
-        if(st.version===x.latestVersion){ clearInterval(t); location.reload(); }
-      }catch{}
-      if(tries>80)clearInterval(t);
-    },1500);
+    pollBackendVersion(true);
   }catch(e){
     $("#applyDev").disabled=false;
     $("#devStatus").textContent=`Errore: ${e.message}`;
@@ -287,7 +323,8 @@ $("#publishDev").onclick=async()=>{
     const x=await r.json();
     if(!r.ok||!x.ok)throw new Error(x.error||"Pubblicazione fallita");
     $("#devStatus").textContent=x.message||"Pubblicato.";
-    checkUpdate();
+    showPublication({version:x.version,confirmedAt:new Date().toISOString()});
+    await checkUpdate();
   }catch(e){
     $("#devStatus").textContent=`Errore GitHub: ${e.message}`;
   }finally{
@@ -319,12 +356,21 @@ $("#saveWorkProfile").onclick=async()=>{
 };
 
 
+let updateCheckGeneration=0;
 async function checkUpdate(automatic=false){
+  const generation=++updateCheckGeneration;
   $("#updateStatus").textContent="Controllo aggiornamenti...";
+  $("#updateNotes").textContent="";
   $("#applyUpdate").classList.add("hidden");
   try{
-    const x=await fetch("/api/update/check").then(r=>r.json());
+    const x=await fetch("/api/update/check?t="+Date.now(),{cache:"no-store",headers:{"Cache-Control":"no-cache"}}).then(r=>r.json());
+    if(generation!==updateCheckGeneration)return;
     if(!x.ok)throw new Error(x.error||"Controllo non riuscito");
+    if(x.publication?.version && x.latestVersion!==x.publication.version && x.currentVersion===x.publication.version){
+      showPublication(x.publication);
+      $("#updateStatus").textContent="Publish v"+x.publication.version+" confermato; manifest GitHub ancora v"+x.latestVersion+" (propagazione in corso).";
+      return;
+    }
     if(x.available){
       $("#updateStatus").textContent=`Aggiornamento disponibile · GitHub v${x.latestVersion} · installata v${x.currentVersion}`;
       $("#applyUpdate").classList.remove("hidden");
@@ -333,6 +379,7 @@ async function checkUpdate(automatic=false){
     }
     $("#updateNotes").textContent="Ultima versione pubblicata: v"+x.latestVersion+(x.notes?" · "+x.notes:"");
   }catch(e){
+    if(generation!==updateCheckGeneration)return;
     $("#updateStatus").textContent=automatic===true
       ? "Controllo aggiornamenti temporaneamente non disponibile. Riprova con Controlla."
       : `Errore controllo: ${e.message}`;
@@ -348,15 +395,7 @@ $("#applyUpdate").onclick=async()=>{
     const x=await r.json();
     if(!r.ok||!x.ok)throw new Error(x.error||"Aggiornamento fallito");
     $("#updateStatus").textContent=x.message||"Riavvio in corso...";
-    let tries=0;
-    const t=setInterval(async()=>{
-      tries++;
-      try{
-        const st=await fetch("/api/status",{cache:"no-store"}).then(r=>r.json());
-        if(st.version===x.latestVersion){ clearInterval(t); location.reload(); }
-      }catch{}
-      if(tries>60)clearInterval(t);
-    },1500);
+    pollBackendVersion(true);
   }catch(e){
     $("#applyUpdate").disabled=false;
     $("#updateStatus").textContent=`Errore: ${e.message}`;

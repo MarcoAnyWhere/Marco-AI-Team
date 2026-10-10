@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.13
+3.3.14
 
 ## Agenti
 - Generale
@@ -130,3 +130,51 @@ Dalla cartella definitiva dell’app eseguire `setup-autostart.cmd`, senza ammin
 `disable-autostart.cmd` rimuove solo l’elemento riconosciuto, anche se già assente; non ferma il server. `start.cmd` resta diagnostico e apre il browser se la porta locale è già attiva; `stop.cmd` arresta solo il processo Node identificato tramite percorso assoluto di server.js e porta locale. Processi non identificabili restano attivi.
 
 Il launcher non apre il browser, usa 127.0.0.1:3210 e non arresta istanze esistenti. Apply riavvia tramite lo stesso launcher nascosto. La UI mostra lo stato della configurazione Startup, non garantisce che Windows esegua l’elemento (ad esempio se disabilitato in Gestione attività). Dopo spostamento dell’app o reinstallazione di Node, rieseguire il setup. Nessun servizio o API aggiuntivi.
+
+
+## v3.3.14 — refresh e DEV autonomo prudente
+
+Staging da installare manualmente (awaiting_apply). Questa preparazione non esegue Apply, restart o Publish.
+
+La pagina riceve la VERSION nel proprio HTML. Ogni 7 secondi, quando visibile, consulta /api/restart-status (no-store): versione uguale = nessun reload; versione diversa = un solo reload per coppia di versioni nella sessione. Offline e focus/visibility sono gestiti senza bloccare i moduli; il Monitor recupera il run persistito. Le pagine v3.3.13 già aperte non possono acquisire codice nuovo prima del primo caricamento della v3.3.14: il flusso Apply locale conserva il suo rilevamento, per un vecchio tab remoto potrebbe servire il primo F5.
+
+Controlla forza no-store/no-cache e timestamp sia verso il backend sia verso latest.json. Il precedente flusso aveva già un timestamp verso GitHub: il dato vecchio osservato non dimostra una cache browser. Mancavano riconciliazione periodica e distinzione fra push confermato e manifest ancora non propagato. Publish aggiorna una revisione operativa, rilevata dal polling della pagina anche per approvazioni Remote. Per due minuti vengono ripetute verifiche limitate del manifest; un manifest precedente viene indicato come propagazione in corso, mai come nuova verifica riuscita della pubblicazione. Se GitHub è offline, note obsolete vengono rimosse e lo stato non verificato è esplicito. Nessun cambio di repository: MarcoAnyWhere/Marco-AI-Team.
+
+### Opt-in Remote DEV
+
+Il comando normale resta invariato. SOLO agent=dev può aggiungere esattamente:
+
+~~~json
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "createdAt": "2026-10-10T12:00:00Z",
+  "agent": "dev",
+  "action": "run",
+  "mode": "smart",
+  "prompt": "Descrizione della modifica applicativa richiesta",
+  "auto": { "pipeline": "safe-v1" }
+}
+~~~
+
+Non sono consentiti comandi shell o altre opzioni auto. Stati: developing, validating, reviewing, applying, verifying, publishing, completed; arresti needs_review o publish_failed. Monitor riusa gli eventi operativi esistenti. Dedup per ID e serializzazione Remote restano attivi anche durante la continuazione updater. Manual-dev/general/work senza auto mantengono il flusso precedente.
+
+Validazioni locali: sintassi server/updater/launcher, parsing di tutti gli script UI, file fondamentali e regressioni simulate di sicurezza. Inventario completo con allowlist DEV_FILES: collegamenti, file extra, directory estranee e rimozioni impediscono Apply autonomo. nextVersion deve essere la patch successiva; test e warning critici devono essere vuoti.
+
+Review indipendente tramite Antigravity autenticato con Google AI Plus: esclusivamente testo dei file applicativi allowlisted e report di validazione, senza task personale, data, history o stdout. Variabili token/API/secret/password sono escluse dall'ambiente del reviewer. Il testo viene segmentato per rispettare il limite degli argomenti Windows; ogni segmento deve essere chiaramente approvato, altrimenti stop. JSON rigoroso: decision APPROVE/REJECT/NEEDS_REVIEW, reason breve, criticalWarnings e testsPassed. Nessun fallback API o retry di quota. Source contenente chiavi private o token riconoscibili viene rifiutata. Staging viene sigillato per hash prima della review e confrontato prima di preparare Apply.
+
+L'updater installato (non quello proposto dallo staging) gestisce Apply autonomo: preflight/checksum, backup applicativo, copia, restart nascosto su 127.0.0.1:3210. Verifica VERSION e UUID nuovo esatto, poi smoke non distruttivo su restart-status/remote-state. Una capability effimera, consumata una volta e mai salvata nei report, autorizza esclusivamente Publish sulla nuova istanza. Il server la rimuove dall'ambiente prima di chiamare motori o git. Apply/Publish concorrenti vengono rifiutati durante la pipeline.
+
+Health/smoke falliti: nessun Publish; rollback dai backup se il processo avviato dall'updater è arrestabile e la porta è libera, con verifica della versione ripristinata. Si arresta esclusivamente il child posseduto, mai genericamente node.exe. Se rollback non confermato, needs_review esplicito. Publish fallito/incerto: locale mantenuto, publish_failed, nessun retry infinito. Status/completed/failed includono fasi, esito, file, validazioni e azioni manuali. Una nuova approvazione manuale può recuperare needs_review con devId oppure publish_failed della versione installata; verificare prima GitHub se l'esito del push era incerto. Una continuazione updater senza aggiornamenti per 15 minuti viene segnalata needs_review senza rieseguire il job.
+
+### Verifica ripetibile senza server o dati personali
+
+~~~powershell
+node --check server.js
+node --check updater.js
+node --check background-launcher.js
+node -e "const fs=require('fs');const s=fs.readFileSync('server.js','utf8');const a=s.indexOf('async function safetyRegressionChecks() {');const b=s.indexOf('const server = http.createServer',a);eval(s.slice(a,b));safetyRegressionChecks().catch(e=>{console.error(e);process.exitCode=1;});"
+~~~
+
+Le regressioni caricano soltanto server.js, updater.js e public/index.html; Apply/restart/review/publish e rollback usano adapter simulati e filesystem in memoria. Non avviare il server dello staging per questi test: il normale avvio usa i dati runtime come nelle versioni precedenti. La suite è anche obbligatoria per ogni futura validazione autonoma e non introduce dipendenze npm.
+
+Limiti: nessuna esecuzione reale di Apply/rollback/Publish o accesso a data durante lo sviluppo di questa release. La review testuale di Antigravity dipende dalla CLI/quota già inclusa; il divieto di tool è nel prompt della CLI, non una nuova sandbox OS. In caso di contesto insufficiente o quota indisponibile si richiede review manuale. I test simulati non sostituiscono il collaudo Windows della prima installazione; modifiche funzionali richiedono test pertinenti oltre alle regressioni comuni. La propagazione CDN GitHub non è controllabile; lo stato distingue conferma push e manifest osservato. Un crash dell'updater o un'interruzione del PC può richiedere recupero manuale dai backup. Zero nuove dipendenze, zero servizi pay-per-use.
