@@ -27,7 +27,7 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
 <header>
   <div>
     <h1>Marco AI Team</h1>
-    <div class="muted">ChatGPT Plus + Google AI Plus + Ollama locale · agenti specializzati · URL job retrieval · auto-update</div>
+    <div class="muted">ChatGPT Plus + Google AI Plus + Ollama locale · agenti specializzati · URL job retrieval · auto-update · Dev Agent</div>
     <div class="version" id="version">versione…</div>
   </div>
   <div class="pill">ZERO COSTI VARIABILI</div>
@@ -41,6 +41,7 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
     <select id="agent">
       <option value="general">Generale</option>
       <option value="work">💼 Agente Lavoro</option>
+      <option value="dev">🛠️ Agente Sviluppo</option>
     </select>
     <select id="mode">
       <option value="smart">Smart · router software</option>
@@ -58,6 +59,12 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
     <button class="secondary workTpl" data-tpl="Adatta il mio CV a questa job description senza inventare esperienze o competenze. Indicami prima le modifiche raccomandate e poi proponi il testo ottimizzato delle sezioni da cambiare.\n\nJOB DESCRIPTION:\n">Adatta CV</button>
     <button class="secondary workTpl" data-tpl="Prepara una lettera di presentazione mirata per questa posizione usando solo esperienze reali del mio profilo.\n\nJOB DESCRIPTION:\n">Lettera mirata</button>
     <button class="secondary" id="editWorkProfile">Profilo lavoro</button>
+  </div>
+  <div id="devTools" class="row hidden">
+    <button class="secondary devTpl" data-tpl="Implementa questa modifica in Marco AI Team mantenendo compatibilità Windows, zero costi variabili e senza toccare dati personali:\n\n">Nuova modifica</button>
+    <button id="applyDev" class="hidden">Applica modifiche</button>
+    <button class="secondary" id="publishDev">Pubblica su GitHub</button>
+    <span class="muted" id="devStatus"></span>
   </div>
 </div>
 
@@ -152,7 +159,15 @@ $("#downloadReport").onclick=()=>{
 
 function syncAgentUI(){
   const isWork=$("#agent").value==="work";
+  const isDev=$("#agent").value==="dev";
   $("#workTools").classList.toggle("hidden",!isWork);
+  $("#devTools").classList.toggle("hidden",!isDev);
+  if(isDev){
+    $("#mode").value="codex";
+    $("#mode").disabled=true;
+  }else{
+    $("#mode").disabled=false;
+  }
 }
 $("#agent").onchange=syncAgentUI;
 syncAgentUI();
@@ -165,6 +180,63 @@ document.querySelectorAll(".workTpl").forEach(b=>{
     $("#task").focus();
   };
 });
+
+let pendingDevId=null;
+
+document.querySelectorAll(".devTpl").forEach(b=>{
+  b.onclick=()=>{
+    $("#agent").value="dev";
+    syncAgentUI();
+    $("#task").value=b.dataset.tpl;
+    $("#task").focus();
+  };
+});
+
+$("#applyDev").onclick=async()=>{
+  if(!pendingDevId)return;
+  if(!confirm("Applicare le modifiche? Verrà creato un backup automatico e Marco AI Team si riavvierà."))return;
+  $("#applyDev").disabled=true;
+  $("#devStatus").textContent="Applicazione e riavvio...";
+  try{
+    const r=await fetch("/api/dev/apply",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({devId:pendingDevId})
+    });
+    const x=await r.json();
+    if(!r.ok||!x.ok)throw new Error(x.error||"Applicazione fallita");
+    $("#devStatus").textContent=x.message||"Riavvio...";
+    let tries=0;
+    const t=setInterval(async()=>{
+      tries++;
+      try{
+        const st=await fetch("/api/status",{cache:"no-store"}).then(r=>r.json());
+        if(st.version===x.latestVersion){ clearInterval(t); location.reload(); }
+      }catch{}
+      if(tries>80)clearInterval(t);
+    },1500);
+  }catch(e){
+    $("#applyDev").disabled=false;
+    $("#devStatus").textContent=`Errore: ${e.message}`;
+  }
+};
+
+$("#publishDev").onclick=async()=>{
+  if(!confirm("Pubblicare la versione installata nel repository GitHub Marco-AI-Team?"))return;
+  $("#publishDev").disabled=true;
+  $("#devStatus").textContent="Pubblicazione GitHub...";
+  try{
+    const r=await fetch("/api/dev/publish",{method:"POST"});
+    const x=await r.json();
+    if(!r.ok||!x.ok)throw new Error(x.error||"Pubblicazione fallita");
+    $("#devStatus").textContent=x.message||"Pubblicato.";
+    checkUpdate();
+  }catch(e){
+    $("#devStatus").textContent=`Errore GitHub: ${e.message}`;
+  }finally{
+    $("#publishDev").disabled=false;
+  }
+};
 
 $("#editWorkProfile").onclick=async()=>{
   const p=await fetch("/api/agents/work").then(r=>r.json());
@@ -250,6 +322,10 @@ $("#go").onclick=async()=>{
     if(!r.ok)throw new Error(x.error||"Errore");
 
     lastRun=x;
+    pendingDevId=x.devId||null;
+    $("#applyDev").classList.toggle("hidden",!pendingDevId);
+    $("#applyDev").disabled=false;
+    if(x.devId)$("#devStatus").textContent=`Staging pronto · ${x.nextVersion||""}`;
     $("#answer").textContent=x.final;
     $("#route").textContent=` · ${x.route} · ${(x.elapsedMs/1000).toFixed(1)}s`;
     $("#trace").innerHTML=x.trace.map(t=>`<pre><b>${esc(t.agent)}</b> — ${esc(t.status)}\n\n${esc(t.result)}</pre>`).join("");

@@ -1,5 +1,6 @@
 data/
 .backups/
+.dev-work/
 .update/
 .last-update.json
 .update-error.txt

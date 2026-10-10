@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.2.1";
+const VERSION = "3.3.0";
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT || 3210);
 const PUBLIC = path.join(ROOT, "public");
@@ -14,6 +14,10 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3:1.7b";
 const AGENTS_DIR = path.join(ROOT, "data", "agents");
 const WORK_PROFILE_FILE = path.join(AGENTS_DIR, "work.json");
 const UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/latest.json";
+const DEV_DIR = path.join(ROOT, ".dev-work");
+const GITHUB_REPO = "MarcoAnyWhere/Marco-AI-Team";
+const GITHUB_CLONE_URL = "https://github.com/MarcoAnyWhere/Marco-AI-Team.git";
+const DEV_FILES = ["server.js","updater.js","public/index.html","start.cmd","stop.cmd","setup-local-model.cmd","setup-github.cmd","README.md",".gitignore"];
 
 const SYSTEM_CONTEXT = `CONTESTO REALE DI MARCO AI TEAM:
 - Codex CLI è autenticato con ChatGPT Plus; non stiamo usando OpenAI API a consumo.
@@ -100,6 +104,256 @@ async function runCodex(prompt, timeout = 240000) {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
   }
 }
+
+
+async function runCodexInDir(prompt, cwd, timeout = 420000) {
+  const tmp = path.join(os.tmpdir(), `marco-ai-dev-${crypto.randomUUID()}.txt`);
+  try {
+    const js = codexJsPath();
+    if (js) {
+      await run(process.execPath, [js, "exec", "--output-last-message", tmp, "-"], {
+        input: prompt,
+        timeout,
+        cwd
+      });
+    } else {
+      await run(process.platform === "win32" ? "codex.cmd" : "codex",
+        ["exec", "--output-last-message", tmp, "-"], {
+          input: prompt,
+          timeout,
+          cwd
+        }
+      );
+    }
+
+    if (!fs.existsSync(tmp)) throw new Error("Codex Dev non ha prodotto il messaggio finale.");
+    const result = fs.readFileSync(tmp, "utf8").trim();
+    if (!result) throw new Error("Codex Dev ha prodotto un output vuoto.");
+    return result;
+  } finally {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+  }
+}
+
+function sha256File(file) {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+function nextPatchVersion(v) {
+  const p = String(v).split(".").map(n => Number(n) || 0);
+  while (p.length < 3) p.push(0);
+  p[2] += 1;
+  return p.slice(0,3).join(".");
+}
+
+function copyAppFiles(fromRoot, toRoot) {
+  fs.mkdirSync(toRoot, { recursive: true });
+  for (const rel of DEV_FILES) {
+    const src = path.join(fromRoot, rel);
+    if (!fs.existsSync(src)) continue;
+    const dest = path.join(toRoot, rel);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+  }
+}
+
+function changedDevFiles(stage) {
+  const changed = [];
+  for (const rel of DEV_FILES) {
+    const a = path.join(ROOT, rel);
+    const b = path.join(stage, rel);
+    if (!fs.existsSync(b)) continue;
+    if (!fs.existsSync(a) || sha256File(a) !== sha256File(b)) changed.push(rel);
+  }
+  return changed;
+}
+
+function forceStageVersion(stage, newVersion) {
+  const sp = path.join(stage, "server.js");
+  let ss = fs.readFileSync(sp, "utf8");
+  ss = ss.replace(/const VERSION = "[^"]+";/, `const VERSION = "${newVersion}";`);
+  fs.writeFileSync(sp, ss, "utf8");
+
+  const startp = path.join(stage, "start.cmd");
+  if (fs.existsSync(startp)) {
+    let x = fs.readFileSync(startp, "utf8");
+    x = x.replace(/v\d+\.\d+\.\d+/g, `v${newVersion}`);
+    fs.writeFileSync(startp, x, "utf8");
+  }
+
+  const readmep = path.join(stage, "README.md");
+  if (fs.existsSync(readmep)) {
+    let x = fs.readFileSync(readmep, "utf8");
+    x = x.replace(/## Versione corrente\s*\r?\n\d+\.\d+\.\d+/, `## Versione corrente\n${newVersion}`);
+    fs.writeFileSync(readmep, x, "utf8");
+  }
+}
+
+async function validateDevStage(stage) {
+  for (const rel of ["server.js", "updater.js"]) {
+    const f = path.join(stage, rel);
+    if (fs.existsSync(f)) {
+      await run(process.execPath, ["--check", f], { cwd: stage, timeout: 30000 });
+    }
+  }
+
+  const htmlFile = path.join(stage, "public", "index.html");
+  if (fs.existsSync(htmlFile)) {
+    const html = fs.readFileSync(htmlFile, "utf8");
+    const match = html.match(/<script>([\s\S]*?)<\/script>/i);
+    if (!match) throw new Error("public/index.html non contiene uno script valido.");
+    // Parse only; do not execute DOM-dependent code.
+    new Function(match[1]);
+  }
+
+  const required = ["server.js","public/index.html","start.cmd","updater.js"];
+  for (const rel of required) {
+    if (!fs.existsSync(path.join(stage, rel))) throw new Error(`File fondamentale mancante nello staging: ${rel}`);
+  }
+}
+
+function buildManifestFromRoot(version) {
+  const files = [];
+  for (const rel of DEV_FILES) {
+    const p = path.join(ROOT, rel);
+    if (!fs.existsSync(p)) continue;
+    files.push({
+      path: rel,
+      sha256: sha256File(p),
+      url: `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${rel}`
+    });
+  }
+  return {
+    version,
+    notes: `Marco AI Team v${version} pubblicata dall'Agente Sviluppo locale.`,
+    files
+  };
+}
+
+async function publishCurrentVersion() {
+  const pub = path.join(os.tmpdir(), `marco-ai-publish-${crypto.randomUUID()}`);
+  try {
+    await run("git", ["clone", GITHUB_CLONE_URL, pub], { cwd: os.tmpdir(), timeout: 120000 });
+
+    copyAppFiles(ROOT, pub);
+    const manifest = buildManifestFromRoot(VERSION);
+    fs.writeFileSync(path.join(pub, "latest.json"), JSON.stringify(manifest, null, 2), "utf8");
+
+    await run("git", ["config", "user.name", "MarcoAnyWhere"], { cwd: pub, timeout: 30000 });
+    await run("git", ["config", "user.email", "MarcoAnyWhere@users.noreply.github.com"], { cwd: pub, timeout: 30000 });
+    await run("git", ["add", "-A"], { cwd: pub, timeout: 30000 });
+
+    const status = await run("git", ["status", "--porcelain"], { cwd: pub, timeout: 30000 });
+    if (!status.out.trim()) {
+      return { published: false, message: `GitHub è già allineato alla v${VERSION}.` };
+    }
+
+    await run("git", ["commit", "-m", `Marco AI Team v${VERSION}`], { cwd: pub, timeout: 60000 });
+    await run("git", ["push", "origin", "main"], { cwd: pub, timeout: 180000 });
+
+    return { published: true, message: `Marco AI Team v${VERSION} pubblicata su GitHub.` };
+  } finally {
+    try { fs.rmSync(pub, { recursive: true, force: true }); } catch {}
+  }
+}
+
+async function executeDev(task) {
+  fs.mkdirSync(DEV_DIR, { recursive: true });
+  const id = crypto.randomUUID();
+  const stage = path.join(DEV_DIR, id);
+  copyAppFiles(ROOT, stage);
+
+  const prompt = `${SYSTEM_CONTEXT}
+
+SEI L'AGENTE SVILUPPO DI MARCO AI TEAM.
+
+Stai lavorando in una COPIA DI STAGING dell'applicazione. Puoi modificare i file presenti nella directory corrente.
+
+OBIETTIVO:
+${task}
+
+VINCOLI OBBLIGATORI:
+- Modifica SOLO i file applicativi presenti nello staging.
+- NON accedere, creare o modificare dati personali, cartella data, credenziali, token, password o file fuori dalla directory corrente.
+- NON usare API a pagamento né introdurre servizi pay-per-use.
+- Mantieni compatibilità Windows e runtime locale.
+- Non fare git push, non pubblicare release e non modificare repository remoti: la pubblicazione è gestita separatamente.
+- Non eliminare le funzioni esistenti se non strettamente necessario.
+- Mantieni il principio zero costi variabili.
+- Se la richiesta è ambigua, scegli l'implementazione più conservativa e documenta l'assunzione.
+- Esegui controlli sintattici ragionevoli prima di concludere.
+
+Alla fine restituisci un riepilogo conciso:
+1. cosa hai cambiato;
+2. file modificati;
+3. test eseguiti;
+4. eventuali rischi residui.`;
+
+  const codexSummary = await runCodexInDir(prompt, stage);
+  let changed = changedDevFiles(stage);
+
+  if (!changed.length) {
+    fs.rmSync(stage, { recursive: true, force: true });
+    return {
+      route: "dev-codex",
+      final: `Codex non ha prodotto modifiche applicative.\n\n${codexSummary}`,
+      trace: [{ agent: "Agente Sviluppo · Codex", status: "ok", result: codexSummary }]
+    };
+  }
+
+  const nextVersion = nextPatchVersion(VERSION);
+  forceStageVersion(stage, nextVersion);
+  await validateDevStage(stage);
+  changed = changedDevFiles(stage);
+
+  const trace = [
+    { agent: "Agente Sviluppo · Codex", status: "ok", result: codexSummary },
+    { agent: "Validatore locale", status: "ok", result: `Syntax check superato. File modificati: ${changed.join(", ")}. Versione proposta: v${nextVersion}.` }
+  ];
+
+  return {
+    route: "dev-codex",
+    final: `${codexSummary}\n\nModifiche pronte nello staging. Versione proposta: v${nextVersion}.\nFile: ${changed.join(", ")}.\n\nUsa “Applica modifiche” per creare il backup, installarle e riavviare.`,
+    trace,
+    devId: id,
+    changedFiles: changed,
+    nextVersion
+  };
+}
+
+function prepareDevApply(devId) {
+  const stage = path.join(DEV_DIR, String(devId || ""));
+  if (!devId || !stage.startsWith(DEV_DIR) || !fs.existsSync(stage)) {
+    throw new Error("Staging sviluppo non trovato.");
+  }
+
+  const sp = path.join(stage, "server.js");
+  const txt = fs.readFileSync(sp, "utf8");
+  const m = txt.match(/const VERSION = "([^"]+)";/);
+  if (!m) throw new Error("Versione staging non rilevabile.");
+  const newVersion = m[1];
+  if (compareVersions(newVersion, VERSION) <= 0) throw new Error("La versione staging non è superiore a quella installata.");
+
+  const changed = changedDevFiles(stage);
+  if (!changed.length) throw new Error("Nessuna modifica da applicare.");
+
+  // updater.js is required as the detached runner even when unchanged.
+  if (!fs.existsSync(path.join(stage, "updater.js"))) {
+    fs.copyFileSync(path.join(ROOT, "updater.js"), path.join(stage, "updater.js"));
+  }
+
+  const manifest = {
+    version: newVersion,
+    notes: "Aggiornamento creato dall'Agente Sviluppo locale.",
+    files: changed.map(rel => ({
+      path: rel,
+      sha256: sha256File(path.join(stage, rel))
+    }))
+  };
+  fs.writeFileSync(path.join(stage, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+  return { stage, newVersion, changed };
+}
+
 
 function agyExe() {
   if (process.platform === "win32" && process.env.LOCALAPPDATA) {
@@ -583,6 +837,7 @@ Rispondi molto brevemente.`, 45000);
 
 async function execute(task, mode, agent="general") {
   if (agent === "work") return executeWork(task, mode);
+  if (agent === "dev") return executeDev(task);
 
   const trace = [];
   let route = mode;
@@ -913,6 +1168,25 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && req.url === "/api/dev/apply") {
+      const body = JSON.parse(await readBody(req) || "{}");
+      const prepared = prepareDevApply(body.devId);
+      startDetachedUpdater(prepared.stage);
+      sendJson(res, 200, {
+        ok: true,
+        latestVersion: prepared.newVersion,
+        changedFiles: prepared.changed,
+        message: `Modifiche applicate. Riavvio verso v${prepared.newVersion} in corso.`
+      });
+      setTimeout(() => process.exit(0), 900);
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/dev/publish") {
+      const result = await publishCurrentVersion();
+      return sendJson(res, 200, { ok: true, version: VERSION, ...result });
+    }
+
     if (req.method === "GET" && req.url === "/api/agents/work") {
       return sendJson(res, 200, readJsonFile(WORK_PROFILE_FILE, {}));
     }
@@ -938,7 +1212,7 @@ const server = http.createServer(async (req, res) => {
       if (!["smart", "panel", "codex", "gemini", "local"].includes(mode)) {
         return sendJson(res, 400, { error: "Modalità non valida." });
       }
-      if (!["general", "work"].includes(agent)) {
+      if (!["general", "work", "dev"].includes(agent)) {
         return sendJson(res, 400, { error: "Agente non valido." });
       }
 
@@ -954,7 +1228,8 @@ const server = http.createServer(async (req, res) => {
         route: result.route,
         elapsedMs: Date.now() - started,
         final: result.final,
-        trace: result.trace
+        trace: result.trace,
+        ...(result.devId ? { devId: result.devId, changedFiles: result.changedFiles, nextVersion: result.nextVersion } : {})
       };
 
       appendHistory(entry);
