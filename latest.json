@@ -1,25 +1,25 @@
 {
-  "version": "3.3.8",
-  "notes": "Marco AI Team v3.3.8 pubblicata dall'Agente Sviluppo locale.",
+  "version": "3.3.9",
+  "notes": "Marco AI Team v3.3.9 pubblicata dall'Agente Sviluppo locale.",
   "files": [
     {
       "path": "server.js",
-      "sha256": "28936a081ebab50f70d4fa36abfd4fac26dbaf6d6a8f325edf7b3ac6964327eb",
+      "sha256": "17f3370c152afff3619e20f89aa566a6b2e84c36f94260c36a513f9498ded276",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/server.js"
     },
     {
       "path": "updater.js",
-      "sha256": "8e4dfe474d6475bc5d7b27db20c9bf8b7f65b15e0a1d5e62048ffe5a39eeefae",
+      "sha256": "dcec85613b9c3c64f2583d3e9505c002aa83913c4f095267c96aa9fdbf7b1e1f",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/updater.js"
     },
     {
       "path": "public/index.html",
-      "sha256": "d62b3aac8bcbff3f29a41df65a01d1996f32dd8930df3514833b7cd88baa5a00",
+      "sha256": "c076b9069e3356f4152530cdf3cc22174b39b57ecfc7413f38fe9d64d48c8d7d",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/public/index.html"
     },
     {
       "path": "start.cmd",
-      "sha256": "1f23733732de2f85731dbd57963a96cdf013fb8353e7610e85d84bd0d17f9f61",
+      "sha256": "a532629961eeaef6403df35a65cde0371ec9b87b2fc8fa7b8d3dae6b16efdf48",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/start.cmd"
     },
     {
@@ -39,12 +39,12 @@
     },
     {
       "path": "README.md",
-      "sha256": "24cc0a4e651771af9aceff0f79c310f7d2a9cb21fe23f445b83721c907f56652",
+      "sha256": "d3b6f50c040a7ab78b60eca1dc2c3b389534c7b23ebeab7b2f4321d8bc618af3",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/README.md"
     },
     {
       "path": ".gitignore",
-      "sha256": "f4d994e38dc41f5859eb156867b464fafc05316f2bea9199fa46de94f9e6fc38",
+      "sha256": "993b441e963fb788ce63c70c5da1a86ac7de86d05e5ec259d8af8e463802298f",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/.gitignore"
     }
   ]

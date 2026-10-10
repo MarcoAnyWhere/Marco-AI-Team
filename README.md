@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.8
+3.3.9
 
 ## Agenti
 - Generale
@@ -78,3 +78,41 @@ Pre-score deterministico: ruolo 34–40, seniority 0–15, geografia 10–20, re
 Le migliori 15 passano in una sola chiamata alla Codex CLI esistente con profilo e descrizioni. Output JSON validato. Se Codex/quota non è disponibile, il trace segnala il limite e le card mostrano “pre-score”; le altre offerte mostrano sempre il pre-score. Nessun fallback a pagamento. “Analizza in dettaglio” usa /api/work/live-analyze con ID, recupera il contenuto dalla cache e riusa l’Agente Lavoro senza nuova richiesta al sito dell’offerta. URL originali e attribuzioni conservati; URL normalizzati usati solo per deduplicare.
 
 Verifica nello staging: parsing sintattico server.js e script UI superato; fixture in memoria per fonte fallita, deduplicazione, cache, seen/onlyNew e singola chiamata Codex superate. Nessun accesso alla cartella data durante lo sviluppo. Test reali tentati sui tre endpoint: fetch dal runtime bloccato da errore di rete; Arbeitnow raggiunto tramite strumento web, Jobicy e Remotive non verificabili da questo ambiente. Da completare verifica end-to-end sul PC con rete e Codex CLI autenticata.
+
+
+## v3.3.9 — Monitor operativo e Remote Control MVP
+
+Il monitor mostra fasi, eventi operativi (massimo 150 per job), heartbeat ogni 9 secondi, file Dev modificati, avanzamento stimato e ETA a intervallo. Non acquisisce stdout delle CLI, ragionamento interno o prompt di sistema. Con storico insufficiente l'ETA è dichiarata non disponibile; altrimenti usa la mediana delle ultime 20 durate per tipo in data/runtime/stats.json. Il progresso è operativo e resta sotto 100 fino al termine.
+
+POST /api/chat e POST /api/work/live-search accettano background:true e restituiscono subito runId. I client precedenti restano compatibili. GET /api/runs/:runId restituisce snapshot e risultato finale; GET /api/runs/:runId/events usa SSE con fallback UI a polling ogni 5 secondi. Nel browser si salva solo il runId in localStorage. I job continuano dopo chiusura o refresh del browser. Un riavvio del processo interrompe i job CLI: vengono segnalati come falliti, senza riesecuzione automatica. Snapshot locali conservati per gli ultimi 100 job, salvo attività ancora in corso. Contengono il risultato finale, quindi restano esclusi da Git insieme a data/.
+
+### Cartella remota locale
+
+Configurare un percorso assoluto dedicato in “Controllo remoto”. Nessun percorso Google Drive è presunto. L'app crea sotto la cartella configurata:
+
+    Remote/
+      inbox/
+      running/
+      completed/
+      failed/
+      approvals/
+      status/
+
+GET/POST /api/remote/config legge/salva data/config/remote.json. Default: enabled:false, folder:"", pollSeconds:10. Disabilitata o senza cartella non esegue scansioni. Se la cartella principale manca segnala warning. Il server rimane su 127.0.0.1; nessun servizio cloud, porta pubblica o costo variabile viene introdotto. È Google Drive Desktop, se configurato dall'utente, a sincronizzare questi file. La cartella sincronizzata deve essere privata: chi può scrivere al suo interno è autorizzato a richiamare le funzioni dell'app.
+
+Esempio inbox/<uuid>.json:
+
+    {"id":"550e8400-e29b-41d4-a716-446655440000","createdAt":"2026-10-10T12:00:00Z","agent":"general","action":"run","mode":"local","prompt":"Riassumi questo testo: ..."}
+
+Allowlist: agent dev/work/general; action run; mode smart/codex/panel/local/gemini. Massimo 32000 caratteri di prompt e 128 KiB per file. Proprietà aggiuntive non ammesse; nessun campo shell, executable, file o data directory. I prompt hanno le stesse facoltà degli agenti già esistenti: non è una sandbox aggiuntiva contro istruzioni malevole. Dev conserva workspace-write e timeout 20 minuti. Elaborazione remota seriale e deduplicazione ID persistente. I file devono essere caricati completamente, preferibilmente tramite rinomina da un nome temporaneo che non termini in .json.
+
+Il risultato finale include richiesta, risposta, trace operativo, versione, devId/nextVersion e file modificati. Dev con staging pronto passa a awaiting_apply. Solo approvals/<id>-apply.json con {"id":"...","action":"apply"} avvia Apply; backup, copia e riavvio restano affidati all'updater esistente. Lo stato diventa applied dopo disponibilità del server e verifica versione. Separatamente approvals/<id>-publish.json con {"id":"...","action":"publish"} autorizza pubblicazione della versione applicata attualmente installata. Nessuna applicazione o pubblicazione automatica. Approvazioni fuori sequenza restano pendenti con warning. Pubblicazione fallita richiede intervento locale, senza retry automatico.
+
+Limiti MVP: nessuna app smartphone inclusa; il protocollo file è pronto per un futuro client. Non riprende processi CLI dopo riavvio e non recupera automaticamente Apply incompleti. Il collegamento a directory dedicate non sostituisce le autorizzazioni Windows/Drive. Non è previsto “Apri cartella”, per mantenere il flusso privo di comandi shell aggiuntivi. Nessuna nuova dipendenza npm o agente.
+
+
+### Verifiche nello staging v3.3.9
+
+Superati node --check server.js, node --check updater.js e parsing degli script UI con Node VM. Superate 28 verifiche rapide con filesystem in memoria: creazione/eventi/snapshot, SSE e presenza fallback polling, completamento/errore, ETA senza e con storico, limite eventi/statistiche, configurazione disabilitata, cartella assente, comando valido/duplicato/non valido, awaiting_apply, approvazione Apply simulata, riconciliazione versione dopo Apply, confronto versioni, ripristino snapshot, ID non valido, contributi Panel indipendenti e Judge, caricamento ricerca live con feed simulato e fallback pre-score, copia/validazione staging Dev. Nessun dato personale, motore cloud, Apply reale o pubblicazione coinvolto nei test.
+
+Restano da verificare sul PC operativo: rendering UI nel browser, Drive Desktop, esecuzione delle CLI autenticate e riavvio Windows reale. Le fixture verificano il protocollo e la logica senza eseguire queste operazioni.

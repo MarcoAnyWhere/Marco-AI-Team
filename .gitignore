@@ -4,3 +4,8 @@ data/
 .update/
 .last-update.json
 .update-error.txt
+data/runtime/
+data/jobs/
+data/config/
+data/agents/
+data/history.jsonl

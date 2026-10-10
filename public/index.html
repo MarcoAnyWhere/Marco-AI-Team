@@ -89,6 +89,20 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
   </div>
 </div>
 
+
+<div class="box hidden" id="activityBox" style="margin-top:14px" aria-live="polite">
+  <b>Attività in corso</b><div id="activityInfo"></div>
+  <progress id="activityProgress" max="100" value="0" style="width:100%"></progress>
+  <div class="muted" id="activityTime"></div><div id="activityLast"></div>
+  <details><summary>Cronologia operativa · ✓ completato · ● in corso · ○ non iniziato · ⚠ warning · ✕ errore</summary><div id="activityEvents"></div></details>
+</div>
+<div class="box" style="margin-top:14px">
+  <b>Controllo remoto</b><div class="row"><label><input type="checkbox" id="remoteEnabled"> Abilitato</label>
+  <input id="remoteFolder" placeholder="Percorso assoluto cartella sincronizzata" aria-label="Cartella remota" style="flex:1;min-width:220px">
+  <button class="secondary" id="saveRemote">Salva configurazione</button></div>
+  <div class="muted" id="remoteStatus"></div>
+</div>
+
 <div class="box" id="updateBox" style="margin-top:14px">
   <div class="row">
     <b>Aggiornamenti</b>
@@ -184,7 +198,7 @@ function renderLiveJobs() {
 }
 $('#liveSearch').onclick=async()=>{
   $('#liveSearch').disabled=true; $('#liveJobsBox').classList.remove('hidden'); $('#jobsSummary').textContent='Recupero feed e valutazione Codex in corso…';
-  try { const r=await fetch('/api/work/live-search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({forceRefresh:$('#forceJobs').checked,onlyNew:false})});const x=await r.json();if(!r.ok)throw new Error(x.error);showJobReport(x); }
+  try { await startBackground('/api/work/live-search',{forceRefresh:$('#forceJobs').checked,onlyNew:false}); }
   catch(e){$('#jobsSummary').textContent='Errore: '+e.message;}
   finally{$('#liveSearch').disabled=false;}
 };
@@ -192,7 +206,7 @@ for(const id of ['onlyNewJobs','minJobFit','jobSource','jobQuery']) $('#'+id).on
 $('#jobCards').onclick=async event=>{
   const button=event.target.closest('[data-job-id]');if(!button)return;
   button.disabled=true;button.textContent='Analisi in corso…';
-  try {const r=await fetch('/api/work/live-analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:button.dataset.jobId})});const x=await r.json();if(!r.ok)throw new Error(x.error);lastRun=x;$('#answer').textContent=x.final;$('#route').textContent=' · '+x.route;$('#trace').innerHTML=x.trace.map(t=>'<pre>'+esc(t.agent)+' — '+esc(t.status)+'\n'+esc(t.result)+'</pre>').join('');$('#result').classList.remove('hidden');}
+  try {await startBackground('/api/work/live-analyze',{id:button.dataset.jobId});}
   catch(e){$('#jobsSummary').textContent='Analisi: '+e.message;}
   finally{button.disabled=false;button.textContent='Analizza in dettaglio';}
 };
@@ -246,6 +260,7 @@ $("#applyDev").onclick=async()=>{
     });
     const x=await r.json();
     if(!r.ok||!x.ok)throw new Error(x.error||"Applicazione fallita");
+    if(x.runId)attachMonitor(x.runId);
     $("#devStatus").textContent=x.message||"Riavvio...";
     let tries=0;
     const t=setInterval(async()=>{
@@ -310,12 +325,12 @@ async function checkUpdate(automatic=false){
     const x=await fetch("/api/update/check").then(r=>r.json());
     if(!x.ok)throw new Error(x.error||"Controllo non riuscito");
     if(x.available){
-      $("#updateStatus").textContent=`Disponibile v${x.latestVersion} · installata v${x.currentVersion}`;
+      $("#updateStatus").textContent=`Aggiornamento disponibile · GitHub v${x.latestVersion} · installata v${x.currentVersion}`;
       $("#applyUpdate").classList.remove("hidden");
     }else{
-      $("#updateStatus").textContent=`Aggiornato · v${x.currentVersion}`;
+      $("#updateStatus").textContent=x.comparison<0?`Versione locale non ancora pubblicata · v${x.currentVersion} · GitHub v${x.latestVersion}`:`Aggiornato · v${x.currentVersion}`;
     }
-    $("#updateNotes").textContent=x.notes||"";
+    $("#updateNotes").textContent="Ultima versione pubblicata: v"+x.latestVersion+(x.notes?" · "+x.notes:"");
   }catch(e){
     $("#updateStatus").textContent=automatic===true
       ? "Controllo aggiornamenti temporaneamente non disponibile. Riprova con Controlla."
@@ -356,56 +371,50 @@ if(document.readyState==="complete"){
 }
 
 $("#go").onclick=async()=>{
-  const task=$("#task").value.trim();
-  if(!task)return;
-  $("#go").disabled=true;
-  const isDevRun=$("#agent").value==="dev";
-  const startedAt=Date.now();
-  const updateDevElapsed=()=>{
-    const elapsed=Date.now()-startedAt;
-    $("#busy").textContent=`Agente Sviluppo in esecuzione · ${Math.floor(elapsed/60000)} min`;
-    $("#devLongWarning").classList.toggle("hidden",elapsed<7*60000);
-  };
-  $("#devLongWarning").textContent="⚠ Operazione più lunga del solito, Codex è ancora in esecuzione.";
-  $("#devLongWarning").classList.add("hidden");
-  $("#busy").textContent="Agenti al lavoro…";
-  if(isDevRun)updateDevElapsed();
-  const devElapsedTimer=isDevRun?setInterval(updateDevElapsed,1000):null;
-  $("#result").classList.add("hidden");
-
-  try{
-    const r=await fetch("/api/chat",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({task,mode:$("#mode").value,agent:$("#agent").value})
-    });
-    const x=await r.json();
-    if(!r.ok)throw new Error(x.error||"Errore");
-
-    if(x.live)showJobReport(x.live);
-    lastRun=x;
-    pendingDevId=x.devId||null;
-    $("#applyDev").classList.toggle("hidden",!pendingDevId);
-    $("#applyDev").disabled=false;
-    if(x.devId)$("#devStatus").textContent=`Staging pronto · ${x.nextVersion||""}`;
-    $("#answer").textContent=x.final;
-    $("#route").textContent=` · ${x.route} · ${(x.elapsedMs/1000).toFixed(1)}s`;
-    $("#trace").innerHTML=x.trace.map(t=>`<pre><b>${esc(t.agent)}</b> — ${esc(t.status)}\n\n${esc(t.result)}</pre>`).join("");
-    $("#result").classList.remove("hidden");
-    loadHistory();
-  }catch(e){
-    lastRun=null;
-    $("#answer").innerHTML=`<span class="error">${esc(e.message)}</span>`;
-    $("#route").textContent=" · ERRORE";
-    $("#trace").innerHTML="";
-    $("#result").classList.remove("hidden");
-  }finally{
-    if(devElapsedTimer!==null)clearInterval(devElapsedTimer);
-    $("#devLongWarning").classList.add("hidden");
-    $("#go").disabled=false;
-    $("#busy").textContent="";
-  }
+  const task=$('#task').value.trim();if(!task)return;
+  $('#go').disabled=true;$('#busy').textContent='Avvio attività…';
+  try{await startBackground('/api/chat',{task,mode:$('#mode').value,agent:$('#agent').value});}
+  catch(e){$('#busy').textContent=e.message;$('#go').disabled=false;}
 };
+
+let monitorSource=null, monitorTimer=null, monitorGeneration=0;
+function durationText(ms){const sec=Math.floor(ms/1000);return Math.floor(sec/60)+' min '+sec%60+' s';}
+function etaText(x){if(x.etaMaxMs==null)return 'non disponibile (storico insufficiente)';const unit=x.etaMaxMs<90000?1000:60000;return '~'+Math.max(0,Math.floor(x.etaMinMs/unit))+'-'+Math.max(1,Math.ceil(x.etaMaxMs/unit))+(unit===1000?' s':' min');}
+function renderRuntimeResult(x){
+  if(x.jobs){showJobReport(x);return;}
+  if(x.live)showJobReport(x.live);
+  if(!x.final)return;
+  lastRun=x;pendingDevId=x.devId||null;
+  $('#applyDev').classList.toggle('hidden',!pendingDevId);$('#applyDev').disabled=false;
+  if(x.devId){$('#agent').value='dev';syncAgentUI();$('#devStatus').textContent='Staging pronto · '+x.nextVersion;}
+  $('#answer').textContent=x.final;$('#route').textContent=' · '+x.route;
+  $('#trace').textContent='Consultare la cronologia operativa nel monitor.';$('#result').classList.remove('hidden');loadHistory().catch(()=>{});
+}
+function stopMonitor(){if(monitorSource)monitorSource.close();monitorSource=null;clearInterval(monitorTimer);monitorTimer=null;}
+function attachMonitor(id){
+  stopMonitor();const generation=++monitorGeneration;
+  try{localStorage.setItem('marcoActiveRunId',id);}catch{}
+  const render=x=>{
+    if(generation!==monitorGeneration)return;
+    $('#activityBox').classList.remove('hidden');
+    const icon=x.status==='running'?'●':x.status==='completed'?'✓':x.status==='cancelled'?'⚠':'✕';
+    $('#activityInfo').textContent=icon+' '+x.agent+' · '+x.route+' · '+x.phase+' · '+x.status+' · avanzamento stimato '+Math.round(x.progress)+'%';
+    $('#activityProgress').value=x.progress;
+    $('#activityTime').textContent='Tempo trascorso: '+durationText(x.elapsedMs)+' · Tempo residuo stimato: '+etaText(x)+' · Affidabilità: '+({low:'bassa',medium:'media',high:'alta'}[x.etaConfidence]||'bassa');
+    $('#activityLast').textContent='Ultima attività: '+(x.events.at(-1)?.message||x.message||'');
+    $('#activityEvents').innerHTML=x.events.map(e=>'<div class="item">'+esc(new Date(e.at).toLocaleTimeString())+' · '+esc(e.message)+'</div>').join('');
+    if(x.status!=='running'){stopMonitor();try{localStorage.removeItem('marcoActiveRunId');}catch{}$('#go').disabled=false;$('#busy').textContent='';if(x.result)renderRuntimeResult(x.result);}
+  };
+  const poll=async()=>{try{const r=await fetch('/api/runs/'+id,{cache:'no-store'});if(r.status===404){stopMonitor();try{localStorage.removeItem('marcoActiveRunId');}catch{}$('#activityLast').textContent='Job non più disponibile';return;}if(!r.ok)throw new Error('Monitor non disponibile');render(await r.json());}catch{$('#activityLast').textContent='⚠ Connessione temporaneamente assente; riconnessione automatica';}};
+  poll();
+  if(window.EventSource){monitorSource=new EventSource('/api/runs/'+id+'/events');monitorSource.onmessage=e=>{try{render(JSON.parse(e.data));}catch{}};monitorSource.onerror=()=>{if(monitorSource)monitorSource.close();monitorSource=null;if(!monitorTimer)monitorTimer=setInterval(poll,5000);};}
+  else monitorTimer=setInterval(poll,5000);
+}
+async function startBackground(url,body){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,background:true})});const x=await r.json();if(!r.ok)throw new Error(x.error||'Avvio fallito');attachMonitor(x.runId);return x;}
+async function loadRemote(){const x=await fetch('/api/remote/config').then(r=>r.json());$('#remoteEnabled').checked=x.enabled;$('#remoteFolder').value=x.folder;$('#remoteStatus').textContent='Abilitato: '+(x.enabled?'sì':'no')+' · Cartella: '+(x.folder||'non configurata')+' · Watcher: '+x.watcher+' · Ultimo ricevuto: '+(x.lastReceived||'nessuno')+' · Ultimo completato: '+(x.lastCompleted||'nessuno');}
+$('#saveRemote').onclick=async()=>{try{const r=await fetch('/api/remote/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:$('#remoteEnabled').checked,folder:$('#remoteFolder').value})});const x=await r.json();if(!r.ok)throw new Error(x.error);await loadRemote();}catch(e){$('#remoteStatus').textContent=e.message;}};
+loadRemote().catch(()=>{});setInterval(()=>{fetch('/api/remote/config').then(r=>r.json()).then(x=>{$('#remoteStatus').textContent='Abilitato: '+(x.enabled?'sì':'no')+' · Cartella: '+(x.folder||'non configurata')+' · Watcher: '+x.watcher+' · Ultimo ricevuto: '+(x.lastReceived||'nessuno')+' · Ultimo completato: '+(x.lastCompleted||'nessuno');}).catch(()=>{});},10000);
+try{const active=localStorage.getItem('marcoActiveRunId');if(active)attachMonitor(active);}catch{}
 
 loadStatus().catch(e=>$("#version").textContent=e.message);
 loadHistory().catch(()=>{});
