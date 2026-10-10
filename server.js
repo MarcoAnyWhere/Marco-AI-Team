@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.10";
+const VERSION = "3.3.11";
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT || 3210);
 const PUBLIC = path.join(ROOT, "public");
@@ -17,7 +17,8 @@ const UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/MarcoAnyWhere/Mar
 const DEV_DIR = path.join(ROOT, ".dev-work");
 const GITHUB_REPO = "MarcoAnyWhere/Marco-AI-Team";
 const GITHUB_CLONE_URL = "https://github.com/MarcoAnyWhere/Marco-AI-Team.git";
-const DEV_FILES = ["server.js","updater.js","public/index.html","start.cmd","stop.cmd","setup-local-model.cmd","setup-github.cmd","README.md",".gitignore"];
+// Future autostart files are optional until v3.3.12; missing files are skipped.
+const DEV_FILES = ["server.js","updater.js","public/index.html","start.cmd","stop.cmd","setup-local-model.cmd","setup-github.cmd","background-launcher.js","setup-autostart.cmd","disable-autostart.cmd","README.md",".gitignore"];
 
 const SYSTEM_CONTEXT = `CONTESTO REALE DI MARCO AI TEAM:
 - Codex CLI è autenticato con ChatGPT Plus; non stiamo usando OpenAI API a consumo.

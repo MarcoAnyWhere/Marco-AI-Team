@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.10
+3.3.11
 
 ## Agenti
 - Generale
@@ -116,3 +116,10 @@ Limiti MVP: nessuna app smartphone inclusa; il protocollo file è pronto per un 
 Superati node --check server.js, node --check updater.js e parsing degli script UI con Node VM. Superate 28 verifiche rapide con filesystem in memoria: creazione/eventi/snapshot, SSE e presenza fallback polling, completamento/errore, ETA senza e con storico, limite eventi/statistiche, configurazione disabilitata, cartella assente, comando valido/duplicato/non valido, awaiting_apply, approvazione Apply simulata, riconciliazione versione dopo Apply, confronto versioni, ripristino snapshot, ID non valido, contributi Panel indipendenti e Judge, caricamento ricerca live con feed simulato e fallback pre-score, copia/validazione staging Dev. Nessun dato personale, motore cloud, Apply reale o pubblicazione coinvolto nei test.
 
 Restano da verificare sul PC operativo: rendering UI nel browser, Drive Desktop, esecuzione delle CLI autenticate e riavvio Windows reale. Le fixture verificano il protocollo e la logica senza eseguire queste operazioni.
+
+
+## v3.3.11 — Prerequisito per autostart
+
+La whitelist `DEV_FILES` include preventivamente `background-launcher.js`, `setup-autostart.cmd` e `disable-autostart.cmd`. I file assenti vengono ignorati da staging, rilevamento modifiche, copia e manifest di pubblicazione. Questa patch non crea questi file e non implementa autostart Windows.
+
+Applicare e riavviare la 3.3.11 prima di preparare la successiva 3.3.12: il server corrente usa la propria whitelist per rilevare e applicare i file dello staging. L’autostart completo andrà implementato nella 3.3.12. Nessun fallback pay-per-use introdotto.
