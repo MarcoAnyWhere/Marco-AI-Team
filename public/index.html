@@ -52,6 +52,7 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
     </select>
     <button id="go">Invia</button>
     <span class="muted" id="busy"></span>
+    <span class="muted hidden" id="devLongWarning" role="status"></span>
   </div>
   <div id="workTools" class="row hidden">
     <button class="secondary workTpl" data-tpl="Analizza questa offerta rispetto al mio profilo. Dammi fit 0-100, punti forti, gap critici, seniority, sede/logistica, RAL se indicata e raccomandazione finale.\n\nINCOLLA QUI L'OFFERTA:\n">Analizza offerta</button>
@@ -358,7 +359,18 @@ $("#go").onclick=async()=>{
   const task=$("#task").value.trim();
   if(!task)return;
   $("#go").disabled=true;
+  const isDevRun=$("#agent").value==="dev";
+  const startedAt=Date.now();
+  const updateDevElapsed=()=>{
+    const elapsed=Date.now()-startedAt;
+    $("#busy").textContent=`Agente Sviluppo in esecuzione · ${Math.floor(elapsed/60000)} min`;
+    $("#devLongWarning").classList.toggle("hidden",elapsed<7*60000);
+  };
+  $("#devLongWarning").textContent="⚠ Operazione più lunga del solito, Codex è ancora in esecuzione.";
+  $("#devLongWarning").classList.add("hidden");
   $("#busy").textContent="Agenti al lavoro…";
+  if(isDevRun)updateDevElapsed();
+  const devElapsedTimer=isDevRun?setInterval(updateDevElapsed,1000):null;
   $("#result").classList.add("hidden");
 
   try{
@@ -388,6 +400,8 @@ $("#go").onclick=async()=>{
     $("#trace").innerHTML="";
     $("#result").classList.remove("hidden");
   }finally{
+    if(devElapsedTimer!==null)clearInterval(devElapsedTimer);
+    $("#devLongWarning").classList.add("hidden");
     $("#go").disabled=false;
     $("#busy").textContent="";
   }

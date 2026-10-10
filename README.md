@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.7
+3.3.8
 
 ## Agenti
 - Generale

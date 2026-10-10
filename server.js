@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.7";
+const VERSION = "3.3.8";
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT || 3210);
 const PUBLIC = path.join(ROOT, "public");
@@ -44,7 +44,7 @@ function run(exe, args, opts = {}) {
 
     const timer = setTimeout(() => {
       try { p.kill(); } catch {}
-      reject(new Error(`Timeout dopo ${Math.round(timeoutMs / 1000)}s`));
+      reject(new Error(opts.timeoutMessage || `Timeout dopo ${Math.round(timeoutMs / 1000)}s`));
     }, timeoutMs);
 
     p.stdout.on("data", d => out += d.toString());
@@ -106,7 +106,7 @@ async function runCodex(prompt, timeout = 240000) {
 }
 
 
-async function runCodexInDir(prompt, cwd, timeout = 420000) {
+async function runCodexInDir(prompt, cwd, timeout = 1200000) {
   const tmp = path.join(os.tmpdir(), `marco-ai-dev-${crypto.randomUUID()}.txt`);
   try {
     const js = codexJsPath();
@@ -119,6 +119,7 @@ async function runCodexInDir(prompt, cwd, timeout = 420000) {
       ], {
         input: prompt,
         timeout,
+        timeoutMessage: "Agente Sviluppo interrotto dopo 20 minuti.",
         cwd
       });
     } else {
@@ -131,6 +132,7 @@ async function runCodexInDir(prompt, cwd, timeout = 420000) {
         ], {
           input: prompt,
           timeout,
+          timeoutMessage: "Agente Sviluppo interrotto dopo 20 minuti.",
           cwd
         }
       );
