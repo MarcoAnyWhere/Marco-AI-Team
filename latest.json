@@ -1,0 +1,51 @@
+{
+  "version": "3.2.1",
+  "notes": "Bootstrap GitHub locale + auto-update + URL Retriever + fix routing Agente Lavoro e Career Judge.",
+  "files": [
+    {
+      "path": "server.js",
+      "sha256": "273563ef4abda4af022abdba3babeac707041301dd9a0784d3fe402f849264a7",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/server.js"
+    },
+    {
+      "path": "updater.js",
+      "sha256": "26617f632d6b430b97291365ae64c69211eba69b464b519f797dfa1bc7fb33fe",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/updater.js"
+    },
+    {
+      "path": "public/index.html",
+      "sha256": "377162b979121c2a610314626a27a1b4f9226f2ef6d92f07ab089df517dc8d57",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/public/index.html"
+    },
+    {
+      "path": "start.cmd",
+      "sha256": "834f9c44fcdbede7e37d863cc38e42587896f976630723c9e7e0c0f4b2fd0f7f",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/start.cmd"
+    },
+    {
+      "path": "stop.cmd",
+      "sha256": "2c55c38a3485bd2b40c2dc2e758e1f897aed9ad75378ec14faa856230654f552",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/stop.cmd"
+    },
+    {
+      "path": "setup-local-model.cmd",
+      "sha256": "8c2e9176c619469e30ff580d58fc62acf93e0abb0a3639c2df4e02c937733ae8",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/setup-local-model.cmd"
+    },
+    {
+      "path": "setup-github.cmd",
+      "sha256": "276481e829814d20c0fb5e8e73e02f49681ca8cf03ebf0b663133a70a5975790",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/setup-github.cmd"
+    },
+    {
+      "path": "README.md",
+      "sha256": "462a04ef76135d6e3410dfb2cd56ccee2e59898009c3d532221da297315db4a7",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/README.md"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "2f24c3904959845ee14593c0498e6ab8e54b93730c410e6536ab00c5372f4daa",
+      "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/.gitignore"
+    }
+  ]
+}

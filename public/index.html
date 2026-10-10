@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Marco AI Team V3</title>
+<style>
+:root{color-scheme:dark;--bg:#0b0e13;--panel:#121722;--line:#252d3d;--text:#eef3fb;--muted:#94a0b2;--ok:#64d79c;--bad:#ff7d86;--accent:#8bb8ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,Segoe UI,Arial}
+.wrap{max-width:1080px;margin:auto;padding:24px}header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}
+h1{margin:0;font-size:30px}.muted{color:var(--muted)}.pill{border:1px solid #245f43;color:var(--ok);padding:7px 11px;border-radius:99px;white-space:nowrap}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:20px 0}.card,.box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:15px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:7px}.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}
+textarea{width:100%;min-height:150px;background:#0d1119;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:13px;font:inherit;resize:vertical}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
+select,button{padding:10px 12px;border-radius:9px;border:1px solid var(--line);background:#171e2b;color:var(--text);font:inherit}
+button{background:#eaf0fb;color:#111827;font-weight:700;cursor:pointer}button.secondary{background:#171e2b;color:var(--text);font-weight:600}button:disabled{opacity:.55;cursor:wait}
+#answer,pre{white-space:pre-wrap;overflow-wrap:anywhere}.hidden{display:none}.route{color:var(--accent);font-size:13px}
+details{border-top:1px solid var(--line);margin-top:14px;padding-top:10px}summary{cursor:pointer;color:var(--muted)}
+pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12px}.item{border-top:1px solid var(--line);padding:9px 0}.item:first-child{border-top:0}
+.version{font-size:12px;color:var(--muted);margin-top:4px}.error{color:var(--bad)}
+@media(max-width:700px){.grid{grid-template-columns:1fr}header{flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>Marco AI Team</h1>
+    <div class="muted">ChatGPT Plus + Google AI Plus + Ollama locale · agenti specializzati · URL job retrieval · auto-update</div>
+    <div class="version" id="version">versione…</div>
+  </div>
+  <div class="pill">ZERO COSTI VARIABILI</div>
+</header>
+
+<div class="grid" id="status"></div>
+
+<div class="box">
+  <textarea id="task" placeholder="Scrivi un obiettivo o una domanda..."></textarea>
+  <div class="row">
+    <select id="agent">
+      <option value="general">Generale</option>
+      <option value="work">💼 Agente Lavoro</option>
+    </select>
+    <select id="mode">
+      <option value="smart">Smart · router software</option>
+      <option value="panel">Panel · Codex + Gemini + Judge</option>
+      <option value="codex">Solo Codex</option>
+      <option value="gemini">Solo Gemini</option>
+      <option value="local">Solo Ollama</option>
+    </select>
+    <button id="go">Invia</button>
+    <span class="muted" id="busy"></span>
+  </div>
+  <div id="workTools" class="row hidden">
+    <button class="secondary workTpl" data-tpl="Analizza questa offerta rispetto al mio profilo. Dammi fit 0-100, punti forti, gap critici, seniority, sede/logistica, RAL se indicata e raccomandazione finale.\n\nINCOLLA QUI L'OFFERTA:\n">Analizza offerta</button>
+    <button class="secondary workTpl" data-tpl="Confronta queste offerte rispetto al mio profilo e dammi una graduatoria motivata, considerando fit, seniority, sede, RAL e probabilità realistica.\n\nINCOLLA QUI LE OFFERTE:\n">Confronta offerte</button>
+    <button class="secondary workTpl" data-tpl="Adatta il mio CV a questa job description senza inventare esperienze o competenze. Indicami prima le modifiche raccomandate e poi proponi il testo ottimizzato delle sezioni da cambiare.\n\nJOB DESCRIPTION:\n">Adatta CV</button>
+    <button class="secondary workTpl" data-tpl="Prepara una lettera di presentazione mirata per questa posizione usando solo esperienze reali del mio profilo.\n\nJOB DESCRIPTION:\n">Lettera mirata</button>
+    <button class="secondary" id="editWorkProfile">Profilo lavoro</button>
+  </div>
+</div>
+
+<div class="box hidden" id="workProfileBox" style="margin-top:14px">
+  <b>Profilo Agente Lavoro</b>
+  <div class="muted">È il contesto persistente usato per valutare offerte e materiali. Modificalo solo se cambia il tuo profilo o i criteri.</div>
+  <textarea id="workProfile" style="min-height:340px;margin-top:10px;font-family:ui-monospace,Consolas,monospace"></textarea>
+  <div class="row">
+    <button id="saveWorkProfile">Salva profilo</button>
+    <button class="secondary" id="closeWorkProfile">Chiudi</button>
+    <span id="profileMsg" class="muted"></span>
+  </div>
+</div>
+
+<div class="box" id="updateBox" style="margin-top:14px">
+  <div class="row">
+    <b>Aggiornamenti</b>
+    <span class="muted" id="updateStatus">Controllo...</span>
+    <button class="secondary" id="checkUpdate">Controlla</button>
+    <button id="applyUpdate" class="hidden">Aggiorna ora</button>
+  </div>
+  <div class="muted" id="updateNotes"></div>
+</div>
+
+<div class="box hidden" id="result" style="margin-top:14px">
+  <div>
+    <b>Risposta finale</b>
+    <span class="route" id="route"></span>
+  </div>
+  <div id="answer" style="margin-top:12px"></div>
+  <div class="row">
+    <button class="secondary" id="copyReport">Copia report</button>
+    <button class="secondary" id="downloadReport">Scarica .md</button>
+  </div>
+  <details>
+    <summary>Trace degli agenti</summary>
+    <div id="trace"></div>
+  </details>
+</div>
+
+<div class="box" style="margin-top:14px">
+  <b>Ultime esecuzioni</b>
+  <div id="hist" class="muted" style="margin-top:8px">Nessuna.</div>
+</div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));
+let lastRun=null;
+
+async function loadStatus(){
+  const s=await fetch("/api/status").then(r=>r.json());
+  $("#version").textContent=`v${s.version} · modello locale ${s.ollamaModel}`;
+  const items=[
+    ["Codex / ChatGPT Plus",s.codex],
+    ["Gemini / Google AI Plus",s.gemini],
+    [`Ollama / ${s.ollamaModel}`,s.ollama]
+  ];
+  $("#status").innerHTML=items.map(([n,x])=>`<div class="card"><b><span class="dot ${x.ok?"ok":"bad"}"></span>${esc(n)}</b><div class="muted">${esc(x.detail||"")}</div></div>`).join("");
+}
+
+async function loadHistory(){
+  const h=await fetch("/api/history").then(r=>r.json());
+  $("#hist").innerHTML=h.length
+    ?h.slice(0,8).map(x=>`<div class="item"><b>${esc(x.agent||"general")} / ${esc(x.route)}</b> · ${new Date(x.at).toLocaleString()} · v${esc(x.version||"?")}<br>${esc(x.task.slice(0,180))}</div>`).join("")
+    :"Nessuna.";
+}
+
+function markdownReport(x){
+  const traces=(x.trace||[]).map(t=>`## ${t.agent} — ${t.status}\n\n${t.result}`).join("\n\n---\n\n");
+  return `# Marco AI Team — report\n\n- Versione: ${x.version}\n- Data: ${x.at}\n- Agente: ${x.agent||"general"}\n- Modalità: ${x.mode}\n- Route: ${x.route}\n- Tempo: ${(x.elapsedMs/1000).toFixed(1)}s\n\n## Richiesta\n\n${x.task}\n\n## Risposta finale\n\n${x.final}\n\n## Trace\n\n${traces}\n`;
+}
+
+$("#copyReport").onclick=async()=>{
+  if(!lastRun)return;
+  await navigator.clipboard.writeText(markdownReport(lastRun));
+  $("#copyReport").textContent="Copiato";
+  setTimeout(()=>$("#copyReport").textContent="Copia report",1200);
+};
+
+$("#downloadReport").onclick=()=>{
+  if(!lastRun)return;
+  const blob=new Blob([markdownReport(lastRun)],{type:"text/markdown;charset=utf-8"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download=`marco-ai-team-${new Date(lastRun.at).toISOString().replace(/[:.]/g,"-")}.md`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+
+function syncAgentUI(){
+  const isWork=$("#agent").value==="work";
+  $("#workTools").classList.toggle("hidden",!isWork);
+}
+$("#agent").onchange=syncAgentUI;
+syncAgentUI();
+
+document.querySelectorAll(".workTpl").forEach(b=>{
+  b.onclick=()=>{
+    $("#agent").value="work";
+    syncAgentUI();
+    $("#task").value=b.dataset.tpl;
+    $("#task").focus();
+  };
+});
+
+$("#editWorkProfile").onclick=async()=>{
+  const p=await fetch("/api/agents/work").then(r=>r.json());
+  $("#workProfile").value=JSON.stringify(p,null,2);
+  $("#workProfileBox").classList.remove("hidden");
+};
+$("#closeWorkProfile").onclick=()=>$("#workProfileBox").classList.add("hidden");
+$("#saveWorkProfile").onclick=async()=>{
+  $("#profileMsg").textContent="";
+  try{
+    const p=JSON.parse($("#workProfile").value);
+    const r=await fetch("/api/agents/work",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(p)
+    });
+    const x=await r.json();
+    if(!r.ok)throw new Error(x.error||"Errore");
+    $("#profileMsg").textContent="Salvato.";
+  }catch(e){
+    $("#profileMsg").textContent=e.message;
+  }
+};
+
+
+async function checkUpdate(){
+  $("#updateStatus").textContent="Controllo aggiornamenti...";
+  $("#applyUpdate").classList.add("hidden");
+  try{
+    const x=await fetch("/api/update/check").then(r=>r.json());
+    if(!x.ok)throw new Error(x.error||"Controllo non riuscito");
+    if(x.available){
+      $("#updateStatus").textContent=`Disponibile v${x.latestVersion} · installata v${x.currentVersion}`;
+      $("#applyUpdate").classList.remove("hidden");
+    }else{
+      $("#updateStatus").textContent=`Aggiornato · v${x.currentVersion}`;
+    }
+    $("#updateNotes").textContent=x.notes||"";
+  }catch(e){
+    $("#updateStatus").textContent=`Errore controllo: ${e.message}`;
+  }
+}
+$("#checkUpdate").onclick=checkUpdate;
+$("#applyUpdate").onclick=async()=>{
+  if(!confirm("Installare l'aggiornamento? Verrà creato un backup automatico e Marco AI Team si riavvierà."))return;
+  $("#applyUpdate").disabled=true;
+  $("#updateStatus").textContent="Download e verifica aggiornamento...";
+  try{
+    const r=await fetch("/api/update/apply",{method:"POST"});
+    const x=await r.json();
+    if(!r.ok||!x.ok)throw new Error(x.error||"Aggiornamento fallito");
+    $("#updateStatus").textContent=x.message||"Riavvio in corso...";
+    let tries=0;
+    const t=setInterval(async()=>{
+      tries++;
+      try{
+        const st=await fetch("/api/status",{cache:"no-store"}).then(r=>r.json());
+        if(st.version===x.latestVersion){ clearInterval(t); location.reload(); }
+      }catch{}
+      if(tries>60)clearInterval(t);
+    },1500);
+  }catch(e){
+    $("#applyUpdate").disabled=false;
+    $("#updateStatus").textContent=`Errore: ${e.message}`;
+  }
+};
+checkUpdate();
+
+$("#go").onclick=async()=>{
+  const task=$("#task").value.trim();
+  if(!task)return;
+  $("#go").disabled=true;
+  $("#busy").textContent="Agenti al lavoro…";
+  $("#result").classList.add("hidden");
+
+  try{
+    const r=await fetch("/api/chat",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({task,mode:$("#mode").value,agent:$("#agent").value})
+    });
+    const x=await r.json();
+    if(!r.ok)throw new Error(x.error||"Errore");
+
+    lastRun=x;
+    $("#answer").textContent=x.final;
+    $("#route").textContent=` · ${x.route} · ${(x.elapsedMs/1000).toFixed(1)}s`;
+    $("#trace").innerHTML=x.trace.map(t=>`<pre><b>${esc(t.agent)}</b> — ${esc(t.status)}\n\n${esc(t.result)}</pre>`).join("");
+    $("#result").classList.remove("hidden");
+    loadHistory();
+  }catch(e){
+    lastRun=null;
+    $("#answer").innerHTML=`<span class="error">${esc(e.message)}</span>`;
+    $("#route").textContent=" · ERRORE";
+    $("#trace").innerHTML="";
+    $("#result").classList.remove("hidden");
+  }finally{
+    $("#go").disabled=false;
+    $("#busy").textContent="";
+  }
+};
+
+loadStatus().catch(e=>$("#version").textContent=e.message);
+loadHistory().catch(()=>{});
+</script>
+</body>
+</html>

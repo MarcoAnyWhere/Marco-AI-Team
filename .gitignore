@@ -1,0 +1,5 @@
+data/
+.backups/
+.update/
+.last-update.json
+.update-error.txt
