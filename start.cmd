@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 echo.
 echo ==============================================
-echo  Marco AI Team v3.3.4 - ZERO COSTI VARIABILI
+echo  Marco AI Team v3.3.6 - ZERO COSTI VARIABILI
 echo ==============================================
 echo.
 
@@ -28,7 +28,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":3210" ^| findstr "LISTENING
   taskkill /PID %%P /F >nul 2>&1
 )
 
-echo Avvio Marco AI Team v3.3.4...
+echo Avvio Marco AI Team v3.3.6...
 start "" http://127.0.0.1:3210
 node server.js
 

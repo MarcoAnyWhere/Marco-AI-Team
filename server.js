@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.4";
+const VERSION = "3.3.6";
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT || 3210);
 const PUBLIC = path.join(ROOT, "public");
@@ -1026,8 +1026,25 @@ async function fetchText(url, timeoutMs = 20000) {
   } finally { clearTimeout(timer); }
 }
 
-async function getUpdateManifest() {
-  const text = await fetchText(`${UPDATE_MANIFEST_URL}?t=${Date.now()}`);
+async function getUpdateManifest(maxAttempts = 1) {
+  let text;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      text = await fetchText(`${UPDATE_MANIFEST_URL}?t=${Date.now()}`, 20000);
+      break;
+    } catch (e) {
+      const timeout = e.name === "AbortError" || e.name === "TimeoutError";
+      const network = e instanceof TypeError && /fetch failed|network|terminated/i.test(e.message)
+        || /^(ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE|UND_ERR_)/.test(e.cause?.code || e.code || "");
+      if (!timeout && !network) throw e;
+      if (attempt === maxAttempts) {
+        if (maxAttempts === 1) throw e;
+        const detail = timeout ? "Timeout nella connessione a GitHub." : `Errore di rete: ${e.cause?.code || e.message}`;
+        throw new Error(`Controllo aggiornamenti temporaneamente non disponibile. ${detail}`, { cause: e });
+      }
+      await new Promise(resolve => setTimeout(resolve, 1500 * attempt));
+    }
+  }
   const m = JSON.parse(text);
   if (!m || !m.version || !Array.isArray(m.files)) throw new Error("Manifest aggiornamento non valido.");
   return m;
@@ -1153,7 +1170,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && req.url === "/api/update/check") {
       try {
-        const manifest = await getUpdateManifest();
+        const manifest = await getUpdateManifest(3);
         return sendJson(res, 200, {
           ok: true,
           currentVersion: VERSION,
