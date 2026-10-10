@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.0";
+const VERSION = "3.3.4";
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT || 3210);
 const PUBLIC = path.join(ROOT, "public");
@@ -111,14 +111,24 @@ async function runCodexInDir(prompt, cwd, timeout = 420000) {
   try {
     const js = codexJsPath();
     if (js) {
-      await run(process.execPath, [js, "exec", "--output-last-message", tmp, "-"], {
+      await run(process.execPath, [
+        js, "exec",
+        "--sandbox", "workspace-write",
+        "--output-last-message", tmp,
+        "-"
+      ], {
         input: prompt,
         timeout,
         cwd
       });
     } else {
       await run(process.platform === "win32" ? "codex.cmd" : "codex",
-        ["exec", "--output-last-message", tmp, "-"], {
+        [
+          "exec",
+          "--sandbox", "workspace-write",
+          "--output-last-message", tmp,
+          "-"
+        ], {
           input: prompt,
           timeout,
           cwd
@@ -307,7 +317,7 @@ Alla fine restituisci un riepilogo conciso:
   changed = changedDevFiles(stage);
 
   const trace = [
-    { agent: "Agente Sviluppo · Codex", status: "ok", result: codexSummary },
+    { agent: "Agente Sviluppo · Codex", status: "ok", result: `Sandbox: workspace-write · policy approvazioni: predefinita CLI\n\n${codexSummary}` },
     { agent: "Validatore locale", status: "ok", result: `Syntax check superato. File modificati: ${changed.join(", ")}. Versione proposta: v${nextVersion}.` }
   ];
 

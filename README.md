@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.0
+3.3.4
 
 ## Agenti
 - Generale
@@ -50,3 +50,18 @@ Al primo push Git Credential Manager può aprire il browser per autorizzare GitH
 - Ollama locale (`qwen3:1.7b`)
 
 Nessun fallback pay-per-use.
+
+
+## Hotfix 3.3.1
+L'Agente Sviluppo avvia Codex CLI esplicitamente con:
+- sandbox `workspace-write`
+- approval policy `never`
+
+Lo staging resta separato dalla cartella `data/`.
+
+
+## Hotfix 3.3.2
+Compatibilità con la versione Codex CLI installata localmente:
+- `--sandbox workspace-write` resta attivo;
+- rimosso `--ask-for-approval never`, non supportato dalla CLI locale;
+- l'Agente Sviluppo opera comunque esclusivamente nella copia di staging.

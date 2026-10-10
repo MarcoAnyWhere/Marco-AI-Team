@@ -48,10 +48,28 @@ function safe(rel) {
     fs.rmSync(path.join(root, ".update"), { recursive: true, force: true });
 
     if (process.platform === "win32") {
-      const p = spawn("cmd.exe", ["/c", "start", "\"Marco AI Team\"", "start.cmd"], {
-        cwd: root, detached: true, windowsHide: true, stdio: "ignore"
-      });
-      p.unref();
+      await sleep(800);
+      const restartLog = path.join(root, ".restart-log.txt");
+      const logRestart = message => {
+        try { fs.appendFileSync(restartLog, message + "\n", "utf8"); } catch {}
+      };
+      logRestart(`Tentativo: ${new Date().toISOString()}`);
+      try {
+        const p = spawn("cmd.exe", ["/d", "/s", "/c", "call start.cmd"], {
+          cwd: root, detached: true, windowsHide: false, stdio: "ignore"
+        });
+        await new Promise((resolve, reject) => {
+          p.once("error", reject);
+          p.once("spawn", () => {
+            logRestart(`PID: ${p.pid}`);
+            resolve();
+          });
+        });
+        p.unref();
+      } catch (e) {
+        logRestart(`PID: non disponibile\nErrore di spawn: ${e.stack || e.message}`);
+        throw e;
+      }
     } else {
       const p = spawn("node", ["server.js"], { cwd: root, detached: true, stdio: "ignore" });
       p.unref();

@@ -1,25 +1,25 @@
 {
-  "version": "3.3.0",
-  "notes": "Agente Sviluppo locale con staging sicuro, test, backup, riavvio, pubblicazione GitHub e auto-update.",
+  "version": "3.3.4",
+  "notes": "Marco AI Team v3.3.4 pubblicata dall'Agente Sviluppo locale.",
   "files": [
     {
       "path": "server.js",
-      "sha256": "690deb086f6b0fe11bafa4347a21398200539be811c9e2dd8770ecf3e6b10653",
+      "sha256": "0fedddf9d686f494974840e3829503d99c8f52a82778aef6860522a8823c8ac6",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/server.js"
     },
     {
       "path": "updater.js",
-      "sha256": "26617f632d6b430b97291365ae64c69211eba69b464b519f797dfa1bc7fb33fe",
+      "sha256": "8e4dfe474d6475bc5d7b27db20c9bf8b7f65b15e0a1d5e62048ffe5a39eeefae",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/updater.js"
     },
     {
       "path": "public/index.html",
-      "sha256": "6ff6601a7a9e4d575112d3dacbc22916a0592926c22a5fbe10e9f8b3f60a6892",
+      "sha256": "c45d841c52e1c23c16d0ee404dba287b50daf15aeedb2049c385a3280c29692d",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/public/index.html"
     },
     {
       "path": "start.cmd",
-      "sha256": "64fca316efd44b4a1b01189a093436d6bfd2e6d7c6dbffe538b484c01438ec60",
+      "sha256": "0c956aed61a3be8e615e7274c42bf04decd1f571fa73a0517a73f38b765f3e59",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/start.cmd"
     },
     {
@@ -39,7 +39,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "60f4f5866ff25d5565d21e56448a714aa232ef8c8ff92cfb3f9a37645fc50b11",
+      "sha256": "77dfb3d09db51b272e3ee9f7aa68ff25be94e004007628e8ddd9209971dff0ac",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/README.md"
     },
     {
