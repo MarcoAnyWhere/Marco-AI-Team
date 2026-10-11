@@ -3,20 +3,30 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.22
+3.3.23 (staging)
 
-Patch nuova dalla base installata 3.3.19: fallback reviewer Codex read-only safe-v1.
-Sessione CLI headless ephemeral con ignore-user-config, ignore-rules, skip-git-repo-check,
-sandbox read-only e cwd temporanea vuota. Schema e messaggio finale sono file temporanei
-host-side separati dalla cwd, sempre rimossi. La decisione proviene esclusivamente dal
-messaggio finale validato; JSONL opzionale serve solo ad audit e blocca tool o eventi
-malformati. Nessun override -c, retry meno isolato o servizio a consumo. Opzioni obbligatorie
-non supportate causano stop sanitizzato, senza degradazione. Seal verificato prima e dopo
-il fallback anche in caso di errore. processApproval auto:false e UI senza Apply manuale
-restano invariati. Assunzione conservativa: versione proposta 3.3.20, ricostruita dalla
-3.3.19, senza riusare la precedente staging 3.3.20. La review di questa patch usa ancora
-il reviewer installato 3.3.19: possibile needs_review/FALLBACK_UNAVAILABLE_OR_INVALID;
-applicazione manuale a cura del controller dopo verifica dei test.
+OAuth Gmail Desktop: campo password Client secret, mai precompilato o restituito dalle
+API; lo stato espone solo `clientSecretConfigured`. Un campo vuoto conserva il secret
+soltanto per lo stesso Client ID. Un nuovo Client ID richiede un nuovo secret e invalida
+prima i token e il tentativo pendente. Configurazione esclusivamente privata locale,
+protetta dal writer e dalle ACL esistenti. Nessun secret nei file applicativi o in Drive.
+Il secret viene inviato una sola volta nello scambio del codice e nel refresh; senza
+secret OAuth viene bloccato prima dell'apertura del listener loopback.
+
+Review automatica: una sola invocazione Antigravity, senza segmenti, retry o fallback.
+Un reviewer indisponibile o una risposta invalida produce `needs_review` con
+`validationStatus: passed` quando la suite locale ha superato i controlli.
+
+Stato di questo ciclo: `needs_review`; suite locale consolidata eseguita una volta e
+superata (config secret PASS, HTTP 16/16, OAuth 36/36, race 3/3, leak scan PASS).
+Unica invocazione Antigravity interrotta per errore di trasporto stdin `write EOF`:
+review non disponibile, non test failure. Nessun secondo tentativo.
+La gestione dell'errore stdin ? stata poi irrobustita e verificata sintatticamente;
+la suite non ? stata ripetuta. Persistenza e output sono testati con storage isolato
+in memoria: non sono stati letti o scritti dati personali, credenziali o cartella data.
+ACL Windows e consenso Google reali richiedono verifica sull'installazione autorizzata.
+Apply, backup e riavvio non eseguiti: review non approvata e lavoro limitato allo staging.
+Pubblicazione demandata al processo separato; nessun push o repository remoto modificato.
 
 ## Email/Event Loop V1 (base staging 3.3.15)
 
