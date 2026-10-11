@@ -27,7 +27,7 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
 <header>
   <div>
     <h1>Marco AI Team</h1>
-    <div class="muted">ChatGPT Plus + Google AI Plus + Ollama locale · agenti specializzati · URL job retrieval · auto-update · Dev Agent</div>
+    <div class="muted">ChatGPT Plus + Google AI Pro + Ollama locale · agenti specializzati · URL job retrieval · auto-update · Dev Agent</div>
     <div class="version" id="version">versione…</div>
   </div>
   <div class="pill">ZERO COSTI VARIABILI</div>
@@ -207,7 +207,7 @@ async function loadStatus(){
   $("#version").textContent=`v${s.version} · modello locale ${s.ollamaModel}`;
   const items=[
     ["Codex / ChatGPT Plus",s.codex],
-    ["Gemini / Google AI Plus",s.gemini],
+    ["Gemini / Google AI Pro",s.gemini],
     [`Ollama / ${s.ollamaModel}`,s.ollama]
   ];
   $("#status").innerHTML=items.map(([n,x])=>`<div class="card"><b><span class="dot ${x.ok?"ok":"bad"}"></span>${esc(n)}</b><div class="muted">${esc(x.detail||"")}</div></div>`).join("");

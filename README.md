@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.25 (staging)
+3.3.26 (staging)
 
 OAuth Gmail Desktop: campo password Client secret, mai precompilato o restituito dalle
 API; lo stato espone solo `clientSecretConfigured`. Un campo vuoto conserva il secret
@@ -32,8 +32,8 @@ Una sola invocazione per review del ciclo/versione, zero retry e zero fallback
 reviewer. Errori producono needs_review e validationStatus=passed quando i test
 locali passano. reviewerFailureCause contiene soltanto uno dei codici sanitizzati
 CLI_NOT_FOUND, AUTH_REQUIRED, MODEL_UNAVAILABLE, QUOTA_OR_RATE_LIMIT, TIMEOUT,
-PROCESS_ERROR, INVALID_ENVELOPE, INVALID_STRUCTURED_OUTPUT; nessun output raw,
-secret o percorso privato. Prompt troppo grande per argv Windows: PROCESS_ERROR
+PROMPT_TOO_LARGE, PROCESS_ERROR, INVALID_ENVELOPE, INVALID_STRUCTURED_OUTPUT; nessun output raw,
+secret o percorso privato. Prompt troppo grande per argv Windows: PROMPT_TOO_LARGE
 prima del lancio, senza frammentazione o tentativi aggiuntivi. Diff insufficiente:
 il reviewer deve scegliere NEEDS_REVIEW.
 
@@ -43,10 +43,22 @@ disabilitati overage/crediti nelle impostazioni esterne; l'app non modifica tali
 impostazioni e non puo certificare le impostazioni di fatturazione della CLI.
 Quota/modello indisponibili fermano il gate senza servizi a consumo.
 
+Contesto deterministico: solo changedFiles nella allowlist DEV_FILES, ordinati e deduplicati.
+Hunk con intervalli vecchi/nuovi e tre righe adiacenti; sincronizzazione limitata a
+64 righe, conservativa per riscritture estese. Sanitizzazione prima degli hunk.
+Budget diff 9000 caratteri totali, massimo 4500 per file e quota equa per tutti
+ i file cambiati, senza redistribuire quote inutilizzate. Solo hunk completi;
+[TRUNCATED REVIEW CONTEXT] indica hunk omessi/totali. Troncamento impone rischio
+alto e istruzione NEEDS_REVIEW se il contesto disponibile non basta.
+Preflight argv <=22000 caratteri con limite superiore prudente per quoting Windows
+(2 volte ciascun argomento, separatori e 1024 caratteri riservati al comando).
+Nessuna seconda invocazione o fallback. I cicli devono limitare i file e i cambiamenti
+per permettere una review completa entro queste quote.
+
 Suite unica consolidata: `node server.js --work-v2-test`, che comprende anche
 Email/OAuth, reporting e mock Antigravity. La validazione staging la esegue una
 sola volta. I mock verificano argv, schema, rischio, invocazione unica e tutte le
-otto cause senza chiamate Antigravity reali. Storage dei test isolato in memoria.
+nove cause senza chiamate Antigravity reali. Storage dei test isolato in memoria.
 
 Questo intervento e limitato allo staging. Suite locale superata; review reale
 non eseguita per non accedere a credenziali o file esterni. Stato del gate:
@@ -58,7 +70,7 @@ Pubblicazione gestita separatamente: nessun push o release da questo intervento.
 ## Email/Event Loop V1 (base staging 3.3.15)
 
 Zero costi variabili e zero dipendenze aggiunte: Node.js built-in, Gmail dell'utente,
-nessun fallback a servizi a consumo. Codex Plus, Google AI Plus e Ollama restano
+nessun fallback a servizi a consumo. Codex Plus, Google AI Pro e Ollama restano
 nei percorsi esistenti. Nessuna email viene inviata automaticamente agli agenti.
 
 Nel cockpit Email/Event salva il Client ID di un client OAuth desktop Google
@@ -160,7 +172,7 @@ Al primo push Git Credential Manager può aprire il browser per autorizzare GitH
 
 ## Motori
 - Codex CLI / ChatGPT Plus
-- Antigravity CLI / Google AI Plus
+- Antigravity CLI / Google AI Pro
 - Ollama locale (`qwen3:1.7b`)
 
 Nessun fallback pay-per-use.
@@ -274,7 +286,7 @@ Non sono consentiti comandi shell o altre opzioni auto. Stati: developing, valid
 
 Validazioni locali: sintassi server/updater/launcher, parsing di tutti gli script UI, file fondamentali e regressioni simulate di sicurezza. Inventario completo con allowlist DEV_FILES: collegamenti, file extra, directory estranee e rimozioni impediscono Apply autonomo. nextVersion deve essere la patch successiva; test e warning critici devono essere vuoti.
 
-Review indipendente tramite Antigravity autenticato con Google AI Plus: esclusivamente testo dei file applicativi allowlisted e report di validazione, senza task personale, data, history o stdout. Variabili token/API/secret/password sono escluse dall'ambiente del reviewer. Il testo viene segmentato per rispettare il limite degli argomenti Windows; ogni segmento deve essere chiaramente approvato, altrimenti stop. JSON rigoroso: decision APPROVE/REJECT/NEEDS_REVIEW, reason breve, criticalWarnings e testsPassed. Nessun fallback API o retry di quota. Source contenente chiavi private o token riconoscibili viene rifiutata. Staging viene sigillato per hash prima della review e confrontato prima di preparare Apply.
+Review indipendente tramite Antigravity autenticato con Google AI Pro: esclusivamente testo dei file applicativi allowlisted e report di validazione, senza task personale, data, history o stdout. Variabili token/API/secret/password sono escluse dall'ambiente del reviewer. Una sola chiamata con diff a hunk e budget preventivo Windows; contesto insufficiente richiede NEEDS_REVIEW, altrimenti stop. JSON rigoroso: decision APPROVE/REJECT/NEEDS_REVIEW, reason breve, criticalWarnings e testsPassed. Nessun fallback API o retry di quota. Source contenente chiavi private o token riconoscibili viene rifiutata. Staging viene sigillato per hash prima della review e confrontato prima di preparare Apply.
 
 L'updater installato (non quello proposto dallo staging) gestisce Apply autonomo: preflight/checksum, backup applicativo, copia, restart nascosto su 127.0.0.1:3210. Verifica VERSION e UUID nuovo esatto, poi smoke non distruttivo su restart-status/remote-state. Una capability effimera, consumata una volta e mai salvata nei report, autorizza esclusivamente Publish sulla nuova istanza. Il server la rimuove dall'ambiente prima di chiamare motori o git. Apply/Publish concorrenti vengono rifiutati durante la pipeline.
 
