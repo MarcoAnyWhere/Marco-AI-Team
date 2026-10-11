@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.16
+3.3.18
 
 ## Email/Event Loop V1 (base staging 3.3.15)
 
@@ -271,3 +271,35 @@ parser21 21/21; explicitAnnualEur10 10/10 con minimumRal=48000; A1_A8 8/8; N1_N1
 Nuove fixture salariali 117/117: periodicita IT/EN 58/58, negativi 12/12, range Unicode, marker multipli, confini di clausola e rumore economico. Content-Type 20/20 sulle quattro route Work/profilo, con confronto dell'intero store in memoria prima/dopo ogni rifiuto; HTTP/security 12/12. Locations/customRal/archivio/concorrenza/ranking/fallback PASS; Greenhouse e Lever static+mock PASS. safetyRegressionChecks 11/11. LIVE_NETWORK_AVAILABLE=NOT_TESTED: non confondere mock con disponibilita live.
 
 Rischi residui: confronto con base installata non eseguito, corpus originale non disponibile, audit indipendente e review Gemini ancora da eseguire; UI verificata sintatticamente, senza sessione browser visuale. APPLY_READY=false fino alla risoluzione delle verifiche di provenienza/copertura esterna. Zero nuove dipendenze; zero costi variabili; nessun dato personale reale letto o modificato.
+
+## 3.3.17 OAuth corrective rebuild #2
+Base: snapshot 3.3.16 fornito nello staging; nessun accesso alla installazione esterna o a staging precedenti. Provenienza installata da verificare indipendentemente confrontando .audit/base.json.
+Scope come insieme, scambio authorization code singolo, diagnostica allowlist, claim esclusivo fino al termine, cleanup compare-and-delete per attemptId/state. La scadenza impedisce nuovi claim e non interrompe scambi gia avviati. Cleanup fallito dopo persistenza lascia Gmail connesso. Refresh token precedente preservato. Nessun Client Secret richiesto.
+Manifest canonico manifest.json: schema version/notes/files con path e SHA256, stessa sealDevManifest usata da prepareDevApply. validateDevStage sigilla il normale output Dev; --seal-dev-stage opera offline nel solo staging contro .audit/base.json. Non avvia server, Apply, updater, Publish o accessi a data. Un Apply manuale della base rigenera il manifest secondo le proprie differenze: auditor deve confrontare la base fornita con la base installata prima di approvare.
+Test offline con store in memoria e HTTP loopback effimero; nessuna chiamata Google o dato personale. Zero dipendenze e costi variabili. Nessun collaudo OAuth reale eseguito.
+
+Verifica rebuild #2: OAuth 18/18, race 3/3, Email/Event 21/21, HTTP Email/Event 16/16, adversarial Email 12/12; Work V2 117/117 adversarial, Content-Type 20/20, HTTP Work 12/12, Safety 11/11, Jobs e updater/Remote PASS. Diagnostica OAuth in memoria (azzerata al riavvio); nessun valore sensibile nel payload status. Il Client ID si configura tramite input, non viene ritrasmesso dal backend allo status.
+
+
+### Correzione OAuth e pipeline safe-v1 (staging da 3.3.17)
+OAuth Gmail usa un Client ID Google di tipo App desktop, callback root su
+127.0.0.1 con porta casuale, state e PKCE S256. Lo scope richiesto ? soltanto
+`https://www.googleapis.com/auth/gmail.readonly`; consenso offline esplicito.
+Il client secret esistente resta opzionale e non viene richiesto dalla UI.
+Gli errori del token endpoint riportano solo HTTP status e un codice tra
+invalid_client, invalid_grant, redirect_uri_mismatch, access_denied,
+unauthorized_client; altrimenti token_endpoint_rejected. Nessun body o
+error_description viene esposto. invalid_client suggerisce App desktop.
+
+Il falso stop derivava dal manifest.json creato dalla prima validazione:
+la seconda inventory lo respingeva perch? fuori allowlist, prima dei syntax
+check. La validazione completa ora ? unica nella pipeline autonoma, con
+inventory prima e dopo i test. Il manuale valida prima di offrire Apply.
+Il manifest viene creato solo nella preparazione Apply, dopo seal e review
+indipendente; allowlist, guard, backup, restart, health/smoke e publish gate
+restano obbligatori. Gli errori autonomi riportano codici locali sanitizzati
+STAGE_* oppure DEVELOP_FAILED, VALIDATION_FAILED, SEAL_OR_REVIEW_FAILED,
+APPLY_PREPARATION_FAILED. I test usano storage JSON in memoria e non creano
+manifest n? dati personali. Regressioni includono percorso APPROVE/Apply,
+inventory prima/dopo, residui e test falliti, OAuth root/PKCE/state/host,
+errori bounded/malformati e assenza di leak. Nessuna API a consumo.

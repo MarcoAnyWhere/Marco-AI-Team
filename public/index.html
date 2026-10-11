@@ -522,8 +522,8 @@ loadStatus().catch(e=>$("#version").textContent=e.message);
 loadHistory().catch(()=>{});
 async function emailApi(route,body){const r=await fetch('/api/email/'+route,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const x=await r.json();if(!r.ok)throw Error(x.error||'Email/Event non disponibile');return x;}
 async function emailRefresh(){
- const s=await emailApi('status');$('#emailClientId').value=s.clientId;
- $('#emailStatus').textContent='OAuth: '+(s.connected?'connesso':s.configured?'da connettere':'da configurare')+' | Drive: '+(s.driveConfigured?'configurato':'configura Remote')+' | '+Object.entries(s.counts).map(([k,v])=>k+': '+v).join(' · ')+' | Ultimo sync: '+(s.lastSync||'mai')+(s.error?' | '+s.error:'');
+ const s=await emailApi('status');
+ $('#emailStatus').textContent='OAuth: '+(s.connected?'connesso':s.configured?'da connettere':'da configurare')+' | Drive: '+(s.driveConfigured?'configurato':'configura Remote')+' | '+Object.entries(s.counts).map(([k,v])=>k+': '+v).join(' · ')+' | Ultimo sync: '+(s.lastSync||'mai')+(s.lastErrorClass?' | '+s.lastErrorClass+' | '+s.lastErrorAt:'');
  $('#emailSync').disabled=!s.connected||!s.driveConfigured||s.busy;
  const table=$('#emailEvents');table.replaceChildren();if(!s.driveConfigured)return;
  const x=await emailApi('events');for(const e of x.events){const tr=document.createElement('tr');
