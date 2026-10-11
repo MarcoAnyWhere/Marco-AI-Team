@@ -74,9 +74,13 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
   <b>Offerte live</b><div id="jobsSummary" class="muted" role="status"></div>
   <div class="row"><label><input type="checkbox" id="onlyNewJobs"> Solo nuove</label>
   <label>Minimo FIT <input id="minJobFit" type="number" min="0" max="100" value="0" style="width:65px"></label>
-  <select id="jobSource"><option value="">Tutte le fonti</option><option>Arbeitnow</option><option>Jobicy</option><option>Remotive</option></select>
+  <select id="jobSource"><option value="">Tutte le fonti</option><option>Arbeitnow</option><option>Jobicy</option><option>Remotive</option><option>Greenhouse</option><option>Lever</option></select>
+  <select id="jobState"><option value="">Tutti gli stati</option><option>new</option><option>reviewed</option><option>saved</option><option>applied</option><option>dismissed</option></select>
+  <input id="jobLocation" placeholder="Filtra localita" aria-label="Localita">
+  <button class="secondary" id="loadArchive">Archivio</button>
+  <label><input type="checkbox" id="useCodexJobs"> Scoring Codex opzionale (Plus)</label>
   <input id="jobQuery" placeholder="Cerca nelle offerte" aria-label="Ricerca testuale locale"></div>
-  <div id="jobCards"></div><details><summary>Trace ricerca live</summary><div id="jobsTrace"></div></details>
+  <div id="jobCounters"></div><div id="jobCards"></div><details><summary>Trace ricerca live</summary><div id="jobsTrace"></div></details>
 </div>
 <div class="box hidden" id="workProfileBox" style="margin-top:14px">
   <b>Profilo Agente Lavoro</b>
@@ -232,29 +236,39 @@ let liveJobs=[];
 function showJobReport(x) {
   liveJobs=x.jobs;
   $('#liveJobsBox').classList.remove('hidden');
-  $('#jobsSummary').textContent=x.totalFound+' offerte trovate · '+x.newCount+' nuove · aggiornamento '+new Date(x.updatedAt).toLocaleString()+' · '+Object.entries(x.sources).map(([s,v])=>s+': '+(v.ok?'riuscita'+(v.cached?' (cache)':''):'fallita')).join(' · ');
+  $('#jobsSummary').textContent=(x.archiveCount||x.jobs.length)+' in archivio / '+x.totalFound+' offerte trovate · '+x.newCount+' nuove · aggiornamento '+new Date(x.updatedAt).toLocaleString()+' · '+Object.entries(x.sources).map(([s,v])=>s+': '+(v.ok?'riuscita'+(v.cached?' (cache)':''):'fallita')).join(' · ');
   $('#jobsTrace').innerHTML=x.trace.map(t=>'<pre>'+esc(t.agent)+' — '+esc(t.status)+'\n'+esc(t.result)+'</pre>').join('');
   renderLiveJobs();
 }
 function renderLiveJobs() {
   const query=$('#jobQuery').value.toLowerCase(), min=Number($('#minJobFit').value)||0;
-  const rows=liveJobs.filter(j=>(!$('#onlyNewJobs').checked||j.isNew)&&j.fit>=min&&(!$('#jobSource').value||j.source===$('#jobSource').value)&&[j.title,j.company,j.location,j.description].join(' ').toLowerCase().includes(query));
-  $('#jobCards').innerHTML=rows.length?rows.map(j=>'<div class="card" style="margin-top:10px;'+(j.isNew?'border-color:var(--ok)':'')+'"><b>'+(j.isNew?'🆕 NUOVA · ':'')+'FIT '+esc(j.fit)+' ('+esc(j.fitKind)+') · '+esc(j.priority)+'</b><div><b>'+esc(j.title)+'</b> · '+esc(j.company)+'</div><div>'+esc(j.location)+' · Remoto: '+(j.remote?'sì':'no')+' · RAL: '+esc(j.salaryText||'non indicata')+'</div><div class="muted">Pubblicazione: '+esc(j.publishedAt?new Date(j.publishedAt).toLocaleDateString():'non indicata')+' · '+esc(j.sourceAttribution)+'</div><div>'+esc(j.motivation)+'</div>'+(j.strongPoints.length?'<div>Punti forti: '+esc(j.strongPoints.join(' · '))+'</div>':'')+(j.gaps.length?'<div>Gap: '+esc(j.gaps.join(' · '))+'</div>':'')+'<div class="row"><a href="'+esc(j.url)+'" target="_blank" rel="noopener noreferrer">Apri offerta</a><button class="secondary" data-job-id="'+esc(j.id)+'">Analizza in dettaglio</button></div></div>').join(''):'Nessuna offerta corrisponde ai filtri.';
+  const rows=liveJobs.filter(j=>(!$('#onlyNewJobs').checked||j.isNew)&&j.fit>=min&&(!$('#jobState').value||j.state===$('#jobState').value)&&j.location.toLowerCase().includes($('#jobLocation').value.toLowerCase())&&(!$('#jobSource').value||j.source===$('#jobSource').value)&&[j.title,j.company,j.location,j.description].join(' ').toLowerCase().includes(query));
+  $('#jobCounters').textContent=rows.length+' visibili / '+liveJobs.length+' in archivio | '+['new','reviewed','saved','applied','dismissed'].map(st=>st+': '+liveJobs.filter(j=>(j.state||'new')===st).length).join(' | ');
+  $('#jobCards').innerHTML=rows.length?rows.map(j=>'<div class="card" style="margin-top:10px;'+(j.isNew?'border-color:var(--ok)':'')+'"><b>'+(j.isNew?'🆕 NUOVA · ':'')+'FIT '+esc(j.fit)+' ('+esc(j.fitKind)+') · '+esc(j.priority)+'</b><div><b>'+esc(j.title)+'</b> · '+esc(j.company)+'</div><div>'+esc(j.location)+' · Remoto: '+(j.remote?'sì':'no')+' · RAL: '+esc(j.salaryText||'non indicata')+'</div><div class="muted">Pubblicazione: '+esc(j.publishedAt?new Date(j.publishedAt).toLocaleDateString():'non indicata')+' · '+esc(j.sourceAttribution)+'</div><div>'+esc(j.motivation)+'</div>'+(j.strongPoints.length?'<div>Punti forti: '+esc(j.strongPoints.join(' · '))+'</div>':'')+(j.gaps.length?'<div>Gap: '+esc(j.gaps.join(' · '))+'</div>':'')+'<div>Stato: '+esc(j.state||'new')+'</div><div class="row">'+['reviewed','saved','applied','dismissed'].map(st=>'<button class="secondary" data-state="'+st+'" data-archive-id="'+esc(j.id)+'">'+st+'</button>').join('')+'</div><textarea data-note-id="'+esc(j.id)+'" maxlength="4000" aria-label="Nota offerta">'+esc(j.note||'')+'</textarea><button class="secondary" data-save-note="'+esc(j.id)+'">Salva nota</button><div class="row"><a href="'+esc(j.url)+'" target="_blank" rel="noopener noreferrer">Apri offerta</a><button class="secondary" data-job-id="'+esc(j.id)+'">Analizza in dettaglio</button></div></div>').join(''):'Nessuna offerta corrisponde ai filtri.';
 }
 $('#liveSearch').onclick=async()=>{
   $('#liveSearch').disabled=true; $('#liveJobsBox').classList.remove('hidden'); $('#jobsSummary').textContent='Recupero feed e valutazione Codex in corso…';
-  try { await startBackground('/api/work/live-search',{forceRefresh:$('#forceJobs').checked,onlyNew:false}); }
+  try { await startBackground('/api/work/live-search',{forceRefresh:$('#forceJobs').checked,onlyNew:false,useCodex:$('#useCodexJobs').checked}); }
   catch(e){$('#jobsSummary').textContent='Errore: '+e.message;}
   finally{$('#liveSearch').disabled=false;}
 };
-for(const id of ['onlyNewJobs','minJobFit','jobSource','jobQuery']) $('#'+id).oninput=renderLiveJobs;
+for(const id of ['onlyNewJobs','minJobFit','jobSource','jobQuery','jobState','jobLocation']) $('#'+id).oninput=renderLiveJobs;
 $('#jobCards').onclick=async event=>{
+  const action=event.target.closest('[data-archive-id],[data-save-note]');
+  if(action){
+    const id=action.dataset.archiveId||action.dataset.saveNote;
+    const body=action.dataset.state?{id,state:action.dataset.state}:{id,note:document.querySelector('[data-note-id="'+id+'"]').value};
+    const r=await fetch('/api/work/job',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const x=await r.json();
+    if(!r.ok){$('#jobsSummary').textContent=x.error;return;}Object.assign(liveJobs.find(j=>j.id===id),x.job);renderLiveJobs();return;
+  }
   const button=event.target.closest('[data-job-id]');if(!button)return;
   button.disabled=true;button.textContent='Analisi in corso…';
   try {await startBackground('/api/work/live-analyze',{id:button.dataset.jobId});}
   catch(e){$('#jobsSummary').textContent='Analisi: '+e.message;}
   finally{button.disabled=false;button.textContent='Analizza in dettaglio';}
 };
+
+$('#loadArchive').onclick=async()=>{const x=await fetch('/api/work/archive').then(r=>r.json());showJobReport({jobs:x.jobs,archiveCount:x.jobs.length,totalFound:0,newCount:x.jobs.filter(j=>j.state==='new').length,updatedAt:x.updatedAt||new Date().toISOString(),sources:{},trace:[]});};
 
 function syncAgentUI(){
   const isWork=$("#agent").value==="work";

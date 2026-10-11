@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.14
+3.3.15
 
 ## Agenti
 - Generale
@@ -178,3 +178,32 @@ node -e "const fs=require('fs');const s=fs.readFileSync('server.js','utf8');cons
 Le regressioni caricano soltanto server.js, updater.js e public/index.html; Apply/restart/review/publish e rollback usano adapter simulati e filesystem in memoria. Non avviare il server dello staging per questi test: il normale avvio usa i dati runtime come nelle versioni precedenti. La suite è anche obbligatoria per ogni futura validazione autonoma e non introduce dipendenze npm.
 
 Limiti: nessuna esecuzione reale di Apply/rollback/Publish o accesso a data durante lo sviluppo di questa release. La review testuale di Antigravity dipende dalla CLI/quota già inclusa; il divieto di tool è nel prompt della CLI, non una nuova sandbox OS. In caso di contesto insufficiente o quota indisponibile si richiede review manuale. I test simulati non sostituiscono il collaudo Windows della prima installazione; modifiche funzionali richiedono test pertinenti oltre alle regressioni comuni. La propagazione CDN GitHub non è controllabile; lo stato distingue conferma push e manifest osservato. Un crash dell'updater o un'interruzione del PC può richiedere recupero manuale dai backup. Zero nuove dipendenze, zero servizi pay-per-use.
+
+## v3.3.15 - Work Agent V2, fix audit 6cffbc39
+
+Rebuild dai file v3.3.14 presenti in questo staging autonomo. Nessun file di staging precedenti usato. Il vincolo di accesso alla sola directory corrente impedisce il confronto con la base installata esterna: la provenienza non e certificata da questa lavorazione.
+
+Profilo: migrazione additiva all'apertura del profilo o alla ricerca; configurazione V2 sotto `workV2` (minimumRal, preferredRal, locations, boards), conservando i campi V1. Default RAL 45000/50000 solo quando invalidi; localita configurate prevalgono sui default. Esempio boards: `{"Greenhouse":["slug-azienda"],"Lever":["slug-azienda"]}`. Nessun board preconfigurato; Ashby disabilitato. Nessun dato reale migrato durante lo sviluppo.
+
+Archivio persistente `data/jobs/archive.json`: stati new/reviewed/saved/applied/dismissed, note, storico delle modifiche, rediscovery conservativa, rilettura prima del merge atomico. API `GET /api/work/archive`, `POST /api/work/job` con `{id,state,note}`. Cockpit con filtri stato/fonte/localita/testo, contatori distinti, azioni e note. Il ranking locale usa lower-bound esplicito annuale EUR; salario mancante non penalizzato. Codex CLI incluso e opzionale (`useCodex:true`); quota indisponibile mantiene il pre-score locale. Nessuna API pay-per-use.
+
+Il parser usa evidence locali e marker salariali; budget/bonus/altro rumore economico separati. Annualita e valuta devono appartenere alla stessa evidence; qualsiasi periodicita incompatibile blocca l'uso della soglia. Importi negativi invalidi; trattini nei range validi preservati. Feed pubblici con host controllati, board slug validati, redirect rifiutati, timeout 15 secondi, limite complessivo header/body 4 MB.
+
+Mutation Work JSON: application/json, anche con charset; altri Content-Type 415 prima di qualunque mutazione. Origin esterni e sec-fetch-site cross-site rifiutati; Origin assente ammesso. Payload 128 KiB, ID/stato/nota validati; bind ordinario 127.0.0.1:3210.
+
+### Gate target e transizione bootstrap
+
+`node server.js --work-v2-test` esegue tutte le suite target, inclusi jobsRegressionChecks e safetyRegressionChecks 11/11. Usa solo fixture in memoria e un server HTTP effimero su loopback, chiuso alla fine. Non legge/scrive data/** e non chiama motori CLI, API cloud o feed live. `validateDevStage` invoca sempre questa suite sul server del TARGET, oltre a controlli sintattici e parsing della UI, anche quando regression=false. Nessun aggiornamento retroattivo della base v3.3.14.
+
+TARGET_VALIDATEDEVSTAGE_COVERAGE=PASS
+BOOTSTRAP_EXTERNAL_GATE_REQUIRED=true
+
+Per questa transizione sono obbligatori, prima di ogni Apply, audit Codex indipendente read-only sullo staging completo e successiva review Gemini. Questi due gate esterni NON sono stati eseguiti dal presente sviluppo. Nessun Apply/Publish/restart eseguito. Il bootstrap non e un difetto di codice del target; non dichiarare acquisita una review assente.
+
+### Risultati offline
+
+parser21 21/21; explicitAnnualEur10 10/10 con minimumRal=48000; A1_A8 8/8; N1_N16 16/16; M1_M4 e multi-marker 6/6. Fixture ricostruite dalla specifica ricevuta: non e stato fornito il corpus originale completo dell'audit, quindi i nomi non certificano identita con quel corpus esterno.
+
+Nuove fixture salariali 117/117: periodicita IT/EN 58/58, negativi 12/12, range Unicode, marker multipli, confini di clausola e rumore economico. Content-Type 20/20 sulle quattro route Work/profilo, con confronto dell'intero store in memoria prima/dopo ogni rifiuto; HTTP/security 12/12. Locations/customRal/archivio/concorrenza/ranking/fallback PASS; Greenhouse e Lever static+mock PASS. safetyRegressionChecks 11/11. LIVE_NETWORK_AVAILABLE=NOT_TESTED: non confondere mock con disponibilita live.
+
+Rischi residui: confronto con base installata non eseguito, corpus originale non disponibile, audit indipendente e review Gemini ancora da eseguire; UI verificata sintatticamente, senza sessione browser visuale. APPLY_READY=false fino alla risoluzione delle verifiche di provenienza/copertura esterna. Zero nuove dipendenze; zero costi variabili; nessun dato personale reale letto o modificato.
