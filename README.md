@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.24 (staging)
+3.3.25 (staging)
 
 OAuth Gmail Desktop: campo password Client secret, mai precompilato o restituito dalle
 API; lo stato espone solo `clientSecretConfigured`. Un campo vuoto conserva il secret
@@ -13,20 +13,47 @@ protetta dal writer e dalle ACL esistenti. Nessun secret nei file applicativi o 
 Il secret viene inviato una sola volta nello scambio del codice e nel refresh; senza
 secret OAuth viene bloccato prima dell'apertura del listener loopback.
 
-Review automatica: una sola invocazione Antigravity, senza segmenti, retry o fallback.
-Un reviewer indisponibile o una risposta invalida produce `needs_review` con
-`validationStatus: passed` quando la suite locale ha superato i controlli.
+Review indipendente Antigravity: headless `agy -p <prompt> --model <model>
+--effort <effort> --output-format json --json-schema <schema JSON>`.
+Il prompt e un argomento, mai stdin. Il parser accetta solo envelope `status=SUCCESS`
+e `structured_output` oggetto conforme allo schema chiuso: decision
+APPROVE/REJECT/NEEDS_REVIEW, reason, criticalWarnings, testsPassed.
+Stdout/stderr rimangono transitori e non vengono salvati nei report.
 
-Stato di questo ciclo: `needs_review`; suite locale consolidata eseguita una volta e
-superata (config secret PASS, HTTP 16/16, OAuth 36/36, race 3/3, leak scan PASS).
-Unica invocazione Antigravity interrotta per errore di trasporto stdin `write EOF`:
-review non disponibile, non test failure. Nessun secondo tentativo.
-La gestione dell'errore stdin ? stata poi irrobustita e verificata sintatticamente;
-la suite non ? stata ripetuta. Persistenza e output sono testati con storage isolato
-in memoria: non sono stati letti o scritti dati personali, credenziali o cartella data.
-ACL Windows e consenso Google reali richiedono verifica sull'installazione autorizzata.
-Apply, backup e riavvio non eseguiti: review non approvata e lavoro limitato allo staging.
-Pubblicazione demandata al processo separato; nessun push o repository remoto modificato.
+Selezione deterministica da changedFiles e diff sanitizzato: README o CSS chiaramente
+cosmetico usa gemini-3.8-flash-medium/medium; modifiche normali usano
+gemini-3.1-pro-high/high. OAuth/auth, segreti, updater/restart, remote approvals,
+publish/git, permessi, shell/processi, rete e filesystem usano Pro/high e review
+sicurezza rafforzata. In caso di dubbio la modifica UI resta rischio normale.
+Nessuna chiamata AI per classificare, nessun modello third-party obbligatorio.
+Codex sviluppa; Antigravity effettua esclusivamente review/test indipendenti.
+
+Una sola invocazione per review del ciclo/versione, zero retry e zero fallback
+reviewer. Errori producono needs_review e validationStatus=passed quando i test
+locali passano. reviewerFailureCause contiene soltanto uno dei codici sanitizzati
+CLI_NOT_FOUND, AUTH_REQUIRED, MODEL_UNAVAILABLE, QUOTA_OR_RATE_LIMIT, TIMEOUT,
+PROCESS_ERROR, INVALID_ENVELOPE, INVALID_STRUCTURED_OUTPUT; nessun output raw,
+secret o percorso privato. Prompt troppo grande per argv Windows: PROCESS_ERROR
+prima del lancio, senza frammentazione o tentativi aggiuntivi. Diff insufficiente:
+il reviewer deve scegliere NEEDS_REVIEW.
+
+Solo quota inclusa Google AI Pro (o piano incluso disponibile): nessuna API key,
+API a consumo, acquisto crediti, overage o AI credits. L'utente deve mantenere
+disabilitati overage/crediti nelle impostazioni esterne; l'app non modifica tali
+impostazioni e non puo certificare le impostazioni di fatturazione della CLI.
+Quota/modello indisponibili fermano il gate senza servizi a consumo.
+
+Suite unica consolidata: `node server.js --work-v2-test`, che comprende anche
+Email/OAuth, reporting e mock Antigravity. La validazione staging la esegue una
+sola volta. I mock verificano argv, schema, rischio, invocazione unica e tutte le
+otto cause senza chiamate Antigravity reali. Storage dei test isolato in memoria.
+
+Questo intervento e limitato allo staging. Suite locale superata; review reale
+non eseguita per non accedere a credenziali o file esterni. Stato del gate:
+needs_review. Apply, backup, restart e health/smoke reali non eseguiti; i relativi
+gate esistenti sono verificati con mock. La continuazione installata resta
+vincolata a test e review APPROVE, quindi backup, Apply, restart, health/smoke.
+Pubblicazione gestita separatamente: nessun push o release da questo intervento.
 
 ## Email/Event Loop V1 (base staging 3.3.15)
 
@@ -81,7 +108,7 @@ node server.js --email-event-test
 node server.js --work-v2-test
 ```
 
-La validazione staging esegue entrambe le suite. E1-E20 e A9, HTTP su porta
+La validazione staging esegue la suite consolidata --work-v2-test. E1-E20 e A9, HTTP su porta
 effimera, storage in memoria e dodici adversarial mirati; nessuna credenziale
 reale, chiamata live Google o nuova dipendenza. LIVE_GMAIL_TESTED=false.
 Limiti V1: finestra recente limitata, non archivio completo; usare una sola
