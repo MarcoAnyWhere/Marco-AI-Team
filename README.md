@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.23 (staging)
+3.3.24 (staging)
 
 OAuth Gmail Desktop: campo password Client secret, mai precompilato o restituito dalle
 API; lo stato espone solo `clientSecretConfigured`. Un campo vuoto conserva il secret
@@ -36,7 +36,7 @@ nei percorsi esistenti. Nessuna email viene inviata automaticamente agli agenti.
 
 Nel cockpit Email/Event salva il Client ID di un client OAuth desktop Google
 configurato dall'utente, quindi scegli Connetti Gmail. L'autorizzazione richiede
-esclusivamente Gmail readonly, usa PKCE S256 e state monouso; il callback e un
+Gmail readonly + send, usa PKCE S256 e state monouso; il callback e un
 listener separato su 127.0.0.1 con porta dinamica e durata massima di tre minuti.
 La API principale resta su 127.0.0.1:3210. Non inserire password, OTP o app-password.
 Un eventuale clientSecret richiesto dal client desktop deve essere configurato
@@ -307,7 +307,7 @@ Verifica rebuild #2: OAuth 18/18, race 3/3, Email/Event 21/21, HTTP Email/Event 
 ### Correzione OAuth e pipeline safe-v1 (staging da 3.3.17)
 OAuth Gmail usa un Client ID Google di tipo App desktop, callback root su
 127.0.0.1 con porta casuale, state e PKCE S256. Lo scope richiesto ? soltanto
-`https://www.googleapis.com/auth/gmail.readonly`; consenso offline esplicito.
+`https://www.googleapis.com/auth/gmail.readonly` e `https://www.googleapis.com/auth/gmail.send`; consenso offline esplicito.
 Il client secret esistente resta opzionale e non viene richiesto dalla UI.
 Gli errori del token endpoint riportano solo HTTP status e un codice tra
 invalid_client, invalid_grant, redirect_uri_mismatch, access_denied,
@@ -328,7 +328,7 @@ inventory prima/dopo, residui e test falliti, OAuth root/PKCE/state/host,
 errori bounded/malformati e assenza di leak. Nessuna API a consumo.
 
 ### OAuth loopback Desktop: correzione staging
-Redirect esatto `http://127.0.0.1:<porta>` (senza slash finale o path), condiviso da authorize e token exchange; il browser invia il callback sulla root `/`. PKCE S256, state, offline, consent e Gmail readonly restano invariati.
+Redirect esatto `http://127.0.0.1:<porta>` (senza slash finale o path), condiviso da authorize e token exchange; il browser invia il callback sulla root `/`. PKCE S256, state, offline, consent e scope Gmail readonly + send.
 Gli errori del token endpoint espongono solo HTTP status, codice in allowlist (incluso invalid_request) e descrizione locale fissa associata al codice. Per privacy la descrizione remota viene sostituita integralmente, anche se contiene segreti o HTML. Nessun payload remoto nei log.
 Test offline con store in memoria e token endpoint simulato: nessun dato personale o credenziale reale. Apply e pubblicazione richiedono tutti i gate safe-v1; i vincoli di questa sessione vietano scritture fuori staging e pubblicazione remota.
 Riferimento: https://developers.google.com/identity/protocols/oauth2/native-app
@@ -354,3 +354,12 @@ La review esterna non ? stata invocata in questa sessione. safe-v1 distingue
 validationStatus=passed e reviewStatus=unavailable in needs_review quando
 entrambi i reviewer inclusi sono indisponibili o restituiscono output invalido.
 Il consenso reale resta da verificare nell'ambiente installato.
+
+
+### Reporting Gmail (v3.3.24)
+Drive Remote resta la fonte di verit? per comandi, stato, approvals e audit. Gmail invia solo pubblicazione confermata, review Antigravity indisponibile e gate che richiedono verifica umana. Nessun heartbeat o log completo. Usa lo stesso client OAuth Desktop, loopback, PKCE S256 e i soli scope gmail.readonly + gmail.send. Nel cockpit usare Riautorizza Gmail per i token precedenti; nessun invio ? possibile prima del consenso.
+Il destinatario predefinito ? la casella restituita da users.getProfile. L'eventuale supervisore e le ricevute di deduplica restano nello storage locale protetto, escluso da manifest e repository. Non inserire indirizzi o credenziali nei file applicativi.
+Ogni evento/versione/run viene registrato prima dell'invio: dopo un timeout o crash non si reinvia automaticamente, anche se ci? pu? perdere una notifica. Solo HTTP 429/5xx consente un singolo retry; errori di rete ambigui non vengono ritentati. Il cockpit espone delivery_failed; Drive conserva lo stato della pipeline. L'avviso OAuth impossibile da inviare viene mostrato localmente e notificato dopo il consenso. Nessun servizio a consumo.
+Suite consolidata con fixture in memoria: `node server.js --work-v2-test`. Non usa token reali n? scrive dati personali. Apply e pubblicazione restano nel percorso esistente dopo suite e unica review Antigravity; questa modifica di staging non li esegue.
+
+Validazione staging: suite consolidata passed; unica invocazione Antigravity unavailable/invalid (CLI richiede argomento per -p, stdin non supportato dal percorso attuale). Stato needs_review, validationStatus=passed. Nessun retry reviewer, Apply o pubblicazione eseguiti. Il contratto CLI Antigravity richiede verifica in un ciclo successivo.

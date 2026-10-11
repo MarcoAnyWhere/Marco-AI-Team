@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.23";
+const VERSION = "3.3.24";
 const EMAIL_TEST_MODE = process.argv.includes('--email-event-test');
 const SEAL_MODE = process.argv.includes("--seal-dev-stage");
 const WORK_TEST_MODE = SEAL_MODE || EMAIL_TEST_MODE || process.argv.includes("--work-v2-test");
@@ -286,6 +286,7 @@ async function publishCurrentVersion() {
     const status = await run("git", ["status", "--porcelain"], { cwd: pub, timeout: 30000 });
     if (!status.out.trim()) {
       publication = { revision: Date.now(), version: VERSION, confirmedAt: new Date().toISOString() };
+      await emailReport('published','publication',VERSION);
       return { published: false, message: `GitHub è già allineato alla v${VERSION}.` };
     }
 
@@ -293,6 +294,7 @@ async function publishCurrentVersion() {
     await run("git", ["push", "origin", "main"], { cwd: pub, timeout: 180000 });
 
     publication = { revision: Date.now(), version: VERSION, confirmedAt: new Date().toISOString() };
+      await emailReport('published','publication',VERSION);
     return { published: true, message: `Marco AI Team v${VERSION} pubblicata su GitHub.` };
   } finally {
     try { fs.rmSync(pub, { recursive: true, force: true }); } catch {}
@@ -475,7 +477,7 @@ async function executeAutonomousDev(task, handlers = {}) {
   const job = runContext.getStore();
   let currentPhase='developing';
   const phase = (name,p) => {currentPhase=name;if(job){job.pipelineStatus=name;job.auto=true;}runEvent(name,'Pipeline DEV · '+name,'info',p);};
-  const stop = (reason,result={}) => {autonomousMutationBusy=false;phase('needs_review',99);return {...result,pipelineStatus:'needs_review',final:'Pipeline fermata prima di Apply: '+reason+'. Azioni manuali: ispezionare staging/report, validare e usare Apply/Publish con approvazione.',reviewReason:reason};};
+  const stop = (reason,result={}) => {autonomousMutationBusy=false;phase('needs_review',99);if(typeof emailReport==='function'&&!WORK_TEST_MODE){void emailReport(reason==='ANTIGRAVITY_UNAVAILABLE_OR_INVALID'?'review':'gate',job?.remoteId||job?.id||result.devId||'',result.nextVersion||VERSION);}return {...result,pipelineStatus:'needs_review',final:'Pipeline fermata prima di Apply: '+reason+'. Azioni manuali: ispezionare staging/report, validare e usare Apply/Publish con approvazione.',reviewReason:reason};};
   let result;
   if(autonomousMutationBusy)return {pipelineStatus:'needs_review',final:'Altra pipeline/mutazione attiva; nessun Apply.'};
   autonomousMutationBusy=true;
@@ -2017,6 +2019,59 @@ const EMAIL_CONFIG=path.join(EMAIL_LOCAL,'config.json');
 const EMAIL_TOKENS=path.join(EMAIL_LOCAL,'tokens.json');
 const EMAIL_PENDING=path.join(EMAIL_LOCAL,'pending.json');
 const EMAIL_SCOPE='https://www.googleapis.com/auth/gmail.readonly';
+const EMAIL_SEND_SCOPE='https://www.googleapis.com/auth/gmail.send';
+const EMAIL_REPORT=path.join(EMAIL_LOCAL,'reporting.json');
+const EMAIL_REPORT_EVENTS=Object.freeze({
+ published:['INFO','Pubblicazione completata','Pubblicazione confermata.','Il sistema prosegue normalmente.','Nessuna'],
+ review:['WARNING','Review Antigravity non disponibile','Review indipendente indisponibile, non valida o quota esaurita.','Pipeline in needs_review; nessun retry o fallback reviewer.','Verificare il gate di review.'],
+ gate:['ACTION REQUIRED','Intervento umano richiesto','Un gate della pipeline richiede verifica manuale.','Pipeline sospesa in needs_review.','Consultare stato e approvazioni in Drive Remote.'],
+ oauth:['ACTION REQUIRED','Riautorizzazione Gmail necessaria','Invio Gmail non autorizzato.','Reporting sospeso; stato disponibile nel cockpit.','Cliccare Riautorizza Gmail e completare il consenso Google.']
+});
+let emailReportQueue=Promise.resolve();
+function emailAddress(v){return typeof v==='string'&&v.length<=254&&/^[A-Za-z0-9][A-Za-z0-9._+%-]{0,63}@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(v);}
+function emailReportingConfig(b){
+ emailSchema(b,['supervisor']);if(b.supervisor!==''&&!emailAddress(b.supervisor))throw httpError(400,'Destinatario non valido');
+ emailPrivateWrite(EMAIL_CONFIG,{...emailConfig(),supervisor:b.supervisor});return {ok:true};
+}
+function emailReport(kind,id='',version=VERSION){
+ const work=async()=>{
+  let state;
+  try{
+   if(!Object.hasOwn(EMAIL_REPORT_EVENTS,kind))return;
+   // Persist a claim BEFORE network I/O: ambiguous delivery must never resend after restart.
+   state=readJsonFile(EMAIL_REPORT,{claims:{}});state.claims=state.claims||{};
+   const safeId=/^[a-zA-Z0-9_-]{1,80}$/.test(id)?id:'none';
+   const safeVersion=/^\d+\.\d+\.\d+$/.test(version)?version:VERSION;
+   const key=emailHash(JSON.stringify([kind,safeId,safeVersion]));if(state.claims[key])return;
+   const t=readJsonFile(EMAIL_TOKENS,{});
+   if(!emailScopeSend(t.scope)){
+    state.last={status:'reauthorization_required',at:new Date().toISOString(),event:'oauth'};
+    emailPrivateWrite(EMAIL_REPORT,state);return;
+   }
+   state.claims[key]='attempted';state.last={status:'sending',at:new Date().toISOString(),event:kind};emailPrivateWrite(EMAIL_REPORT,state);
+   const token=await emailToken(),headers={Authorization:'Bearer '+token};
+   const profile=await emailRequest('https://gmail.googleapis.com/gmail/v1/users/me/profile',{headers});
+   const recipient=emailConfig().supervisor||profile.emailAddress;if(!emailAddress(recipient)||!emailAddress(profile.emailAddress))throw Error();
+   const [level,title,happened,next,action]=EMAIL_REPORT_EVENTS[kind];
+   const subject=`[Marco AI][${level}][v${safeVersion}] ${title}`;
+   const body=`Timestamp Europe/Rome: ${new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Rome',dateStyle:'short',timeStyle:'medium'}).format(new Date())}\nVersione: ${safeVersion}\nCommand/run id: ${safeId}\nStato: ${level}\nEvento: ${happened}\nProssimo passo: ${next}\nAzione umana: ${action}\nFonte di verita: Drive Remote.\n`;
+   const mime=`From: ${profile.emailAddress}\r\nTo: ${recipient}\r\nSubject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${Buffer.from(body).toString('base64').match(/.{1,76}/g).join('\r\n')}\r\n`;
+   for(let attempt=0;attempt<2;attempt++){
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
+    let retry=false;
+    try{
+     const r=await emailFetcher('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({raw:Buffer.from(mime).toString('base64url')}),signal:controller.signal,redirect:'error'});
+     retry=attempt===0&&(r.status===429||(r.status>=500&&r.status<=599));
+     if(!retry){if(!r.ok)throw Error();state.claims[key]='sent';state.last={status:'sent',at:new Date().toISOString(),event:kind};break;}
+    }finally{clearTimeout(timer);}
+    if(retry)await new Promise(r=>setTimeout(r,500));
+   }
+   emailPrivateWrite(EMAIL_REPORT,state);
+  }catch{try{emailPrivateWrite(EMAIL_REPORT,{...(state||{claims:{}}),last:{status:'delivery_failed',at:new Date().toISOString(),event:kind}});}catch{}}
+ };
+ emailReportQueue=emailReportQueue.then(work,work);return emailReportQueue;
+}
+function emailScopeSend(scope){return typeof scope==='string'&&scope.split(/\s+/).includes(EMAIL_SEND_SCOPE);}
 const EMAIL_STATES=['new','reviewed','ignored','processed'];
 let emailBusy=false,emailCallback=null,emailFetcher=fetch,emailClaim=null;
 let emailDiagnostic={lastErrorClass:null,lastErrorAt:null};
@@ -2050,7 +2105,7 @@ function emailError(k,status=400){return Object.assign(httpError(status,EMAIL_CL
 function emailDiagnose(k,e){emailDiagnostic={lastErrorClass:EMAIL_CLASSES.has(k)?k:'CALLBACK_INVALID',lastErrorAt:new Date().toISOString(),...(e?.errorClass==='TOKEN_ENDPOINT_REJECTED'?{httpStatus:e.httpStatus,oauthCode:EMAIL_OAUTH_CODES.has(e.oauthCode)?e.oauthCode:'token_endpoint_rejected',oauthDescription:emailSanitizeOAuthDescription(e.oauthDescription)||emailOAuthDescription(e.oauthCode)}:{})};}
 function emailScopeValid(scope){return typeof scope==='string'&&new Set(scope.trim().split(/\s+/)).has(EMAIL_SCOPE);}
 function emailValidateToken(t){if(!t||typeof t.access_token!=='string'||!t.access_token||t.refresh_token!==undefined&&(typeof t.refresh_token!=='string'||!t.refresh_token)||!Number.isFinite(t.expires_in)||t.expires_in<=0)throw emailError('TOKEN_RESPONSE_INVALID',502);if(!emailScopeValid(t.scope))throw emailError('SCOPE_REQUIRED_MISSING',502);}
-function emailPersistToken(t){emailValidateToken(t);try{const previous=readJsonFile(EMAIL_TOKENS,{});emailPrivateWrite(EMAIL_TOKENS,{access_token:t.access_token,refresh_token:t.refresh_token||previous.refresh_token||null,expiresAt:Date.now()+Math.min(3600,t.expires_in)*1000});}catch{throw emailError('TOKEN_STORAGE_ERROR',500);}}
+function emailPersistToken(t){emailValidateToken(t);try{const previous=readJsonFile(EMAIL_TOKENS,{});emailPrivateWrite(EMAIL_TOKENS,{access_token:t.access_token,refresh_token:t.refresh_token||previous.refresh_token||null,scope:t.scope,expiresAt:Date.now()+Math.min(3600,t.expires_in)*1000});}catch{throw emailError('TOKEN_STORAGE_ERROR',500);}}
 function emailHash(v){return crypto.createHash('sha256').update(v).digest('hex');}
 function emailStorePath(){
  if(!remoteConfig.folder||!path.isAbsolute(remoteConfig.folder))throw httpError(409,'Configura la cartella Drive Remote');
@@ -2088,7 +2143,7 @@ function emailSaveConfig(b){
  if(b.clientSecret!==undefined&&(typeof b.clientSecret!=='string'||b.clientSecret.length>512||/[\r\n]/.test(b.clientSecret)||(b.clientSecret!==''&&!b.clientSecret.trim())))throw httpError(400,'Client secret non valido');
  if(emailBusy||emailCallback||emailClaim)throw httpError(409,'Attendi operazione Gmail');
  const old=emailConfig(),changed=old.clientId!==b.clientId;
- const next={clientId:b.clientId,clientSecret:b.clientSecret||(!changed?old.clientSecret:undefined)};
+ const next={supervisor:old.supervisor||'',clientId:b.clientId,clientSecret:b.clientSecret||(!changed?old.clientSecret:undefined)};
  emailRequireSecret(next);
  // Invalidate before changing identity: a failed private write must never reuse old tokens.
  if(changed){emailPrivateWrite(EMAIL_TOKENS,{});emailPrivateWrite(EMAIL_PENDING,{});}
@@ -2098,7 +2153,7 @@ function emailStatus(){
  let s={events:[],error:null},driveConfigured=false;
  try{s=emailLoad();driveConfigured=true;}catch(e){s.error=e.status?e.message:'Stato Drive non disponibile';}
  const c=emailConfig(),t=readJsonFile(EMAIL_TOKENS,{});
- return {version:VERSION,configured:!!c.clientId,clientSecretConfigured:!!c.clientSecret,connected:!!(t.refresh_token||t.access_token),driveConfigured,busy:emailBusy,lastSync:s.lastSync||null,...emailDiagnostic,counts:Object.fromEntries(EMAIL_STATES.map(x=>[x,(s.events||[]).filter(e=>e.status===x).length]))};
+ return {sendAuthorized:emailScopeSend(t.scope),reauthorizationRequired:!!(t.refresh_token||t.access_token)&&!emailScopeSend(t.scope),reporting:readJsonFile(EMAIL_REPORT,{}).last||null,supervisor:c.supervisor||'',version:VERSION,configured:!!c.clientId,clientSecretConfigured:!!c.clientSecret,connected:!!(t.refresh_token||t.access_token),driveConfigured,busy:emailBusy,lastSync:s.lastSync||null,...emailDiagnostic,counts:Object.fromEntries(EMAIL_STATES.map(x=>[x,(s.events||[]).filter(e=>e.status===x).length]))};
 }
 function emailRaw(v){if(typeof v!=='string'||v.length>65536)throw Error('Invalid metadata');return v.normalize('NFC').replace(/[\r\n\t]+/g,' ').trim();}
 function emailRecord(raw){
@@ -2210,7 +2265,7 @@ async function emailHandleCallback(req,res,c,cb){
  emailClaim=p;owner=p; // synchronous validation and claim, before the first await
  const b=new URLSearchParams({client_id:c.clientId,code,code_verifier:p.verifier,redirect_uri:p.redirectUri,grant_type:'authorization_code'});
  if(c.clientSecret)b.set('client_secret',c.clientSecret);
- const t=await emailCodeExchange(b);emailPersistToken(t);success=true;k='OAUTH_OK';emailDiagnose(k);
+ const t=await emailCodeExchange(b);emailPersistToken(t);success=true;k='OAUTH_OK';emailDiagnose(k);if(!WORK_TEST_MODE&&readJsonFile(EMAIL_REPORT,{}).last?.event==='oauth')void emailReport('oauth','consent',VERSION);
  }catch(e){k=e.errorClass||'CALLBACK_INVALID';emailDiagnose(k,e);if(k==='TOKEN_ENDPOINT_REJECTED'){detail=' HTTP '+emailDiagnostic.httpStatus+' '+emailDiagnostic.oauthCode;detail+=' '+emailDiagnostic.oauthDescription;}}
  finally{
  if(owner){
@@ -2234,7 +2289,7 @@ async function emailOAuth(){
  emailPrivateWrite(EMAIL_PENDING,p);
  }catch{cb.close();if(emailCallback===cb)emailCallback=null;throw emailError('PENDING_STORAGE_ERROR',500);}
  const timer=setTimeout(()=>emailExpire(p,cb),180000);timer.unref();cb.on('close',()=>clearTimeout(timer));
- const u=new URL('https://accounts.google.com/o/oauth2/v2/auth');Object.entries({client_id:c.clientId,redirect_uri:p.redirectUri,response_type:'code',scope:EMAIL_SCOPE,state:p.state,code_challenge:crypto.createHash('sha256').update(p.verifier).digest('base64url'),code_challenge_method:'S256',access_type:'offline',prompt:'consent'}).forEach(([k,v])=>u.searchParams.set(k,v));
+ const u=new URL('https://accounts.google.com/o/oauth2/v2/auth');Object.entries({client_id:c.clientId,redirect_uri:p.redirectUri,response_type:'code',scope:EMAIL_SCOPE+' '+EMAIL_SEND_SCOPE,state:p.state,code_challenge:crypto.createHash('sha256').update(p.verifier).digest('base64url'),code_challenge_method:'S256',access_type:'offline',prompt:'consent'}).forEach(([k,v])=>u.searchParams.set(k,v));
  return {url:u.href};
 }
 async function emailRoute(req,res){
@@ -2245,6 +2300,7 @@ async function emailRoute(req,res){
  if(req.method!=='POST')throw httpError(404,'Endpoint Email/Event non trovato');
  if(!/^application\/json(?:\s*;\s*charset=utf-8)?\s*$/i.test(req.headers['content-type']||''))throw httpError(415,'Richiesto JSON UTF-8');
  const b=await readJsonBody(req);
+ if(req.url==='/api/email/reporting')return sendJson(res,200,emailReportingConfig(b));
  if(req.url==='/api/email/config')return sendJson(res,200,emailSaveConfig(b));
  if(req.url==='/api/email/event')return sendJson(res,200,emailUpdate(b));
  emailSchema(b,[]);
@@ -2548,7 +2604,7 @@ async function jobsRegressionChecks(){
  const fallback=await performLiveSearch({}, {...deps,codex:async()=>{throw Error('quota unavailable');}});assert.equal(fallback.jobs[0].fitKind,'pre-score');assert.equal(fallback.jobs[0].state,'applied');
  assert.equal(dedupeLiveJobs([j,{...j,url:j.url+'?utm_source=x'}]).jobs.length,1);assert(preScoreJob(j,liveCriteria(profile)).fit>preScoreJob({...j,title:'Junior Data Manager'},liveCriteria(profile)).fit);return 'PASS';
 }
-if(WORK_TEST_MODE&&!EMAIL_TEST_MODE&&!SEAL_MODE)workV2RegressionChecks().catch(e=>{console.error(e);process.exitCode=1;server.close();});
+if(WORK_TEST_MODE&&!EMAIL_TEST_MODE&&!SEAL_MODE)(async()=>{await workV2RegressionChecks();await emailRegressionChecks();await emailReportingRegressionChecks();})().catch(e=>{console.error(e);process.exitCode=1;server.close();});
 async function emailRegressionChecks(){
  const a=require('node:assert/strict'),report={};remoteConfig.folder=path.join(ROOT,'mock-drive');
  const row=(id='abc',mid='<fixture>')=>({...(id?{id}:{}),threadId:'thread',internalDate:'1700000000000',payload:{headers:[{name:'Message-ID',value:mid},{name:'From',value:'fixture@example.test'},{name:'Subject',value:'<script>alert(1)</script>'}]}});
@@ -2589,7 +2645,7 @@ async function emailRegressionChecks(){
  a(!JSON.stringify({status:emailStatus(),remote:emailLoad(),history:readJsonFile(HISTORY,[])}).includes(secret));
  a(emailPrivateWrite.toString().includes('icacls.exe'));a(emailPrivateWrite.toString().includes('renameSync(tmp,file)'));
  });
- await check('E17',async()=>{emailPrivateWrite(EMAIL_CONFIG,{clientId:'fixture.apps.googleusercontent.com',clientSecret:secret});const o=await emailOAuth(),u=new URL(o.url),pending=readJsonFile(EMAIL_PENDING,{});a.equal(pending.redirectUri,'http://127.0.0.1:'+pending.port);a.equal(u.searchParams.get('redirect_uri'),pending.redirectUri);a.match(pending.verifier,/^[A-Za-z0-9_-]{43}$/);a.equal(u.searchParams.get('state'),pending.state);a.equal(new URL(pending.redirectUri).pathname,'/');a.equal(new URL(pending.redirectUri).hostname,'127.0.0.1');a.equal(u.searchParams.get('scope'),EMAIL_SCOPE);a.equal(u.searchParams.get('access_type'),'offline');a.equal(u.searchParams.get('prompt'),'consent');a.equal(u.searchParams.get('code_challenge_method'),'S256');a.equal(u.searchParams.get('code_challenge'),crypto.createHash('sha256').update(pending.verifier).digest('base64url'));a(!JSON.stringify(emailLoad()).includes(pending.verifier));
+ await check('E17',async()=>{emailPrivateWrite(EMAIL_CONFIG,{clientId:'fixture.apps.googleusercontent.com',clientSecret:secret});const o=await emailOAuth(),u=new URL(o.url),pending=readJsonFile(EMAIL_PENDING,{});a.equal(pending.redirectUri,'http://127.0.0.1:'+pending.port);a.equal(u.searchParams.get('redirect_uri'),pending.redirectUri);a.match(pending.verifier,/^[A-Za-z0-9_-]{43}$/);a.equal(u.searchParams.get('state'),pending.state);a.equal(new URL(pending.redirectUri).pathname,'/');a.equal(new URL(pending.redirectUri).hostname,'127.0.0.1');a.equal(u.searchParams.get('scope'),EMAIL_SCOPE+' '+EMAIL_SEND_SCOPE);a.equal(u.searchParams.get('access_type'),'offline');a.equal(u.searchParams.get('prompt'),'consent');a.equal(u.searchParams.get('code_challenge_method'),'S256');a.equal(u.searchParams.get('code_challenge'),crypto.createHash('sha256').update(pending.verifier).digest('base64url'));a(!JSON.stringify(emailLoad()).includes(pending.verifier));
  const bad=await fetch(pending.redirectUri+'?state=wrong&code=fixture');a.equal(bad.status,400);a.equal(readJsonFile(EMAIL_PENDING,{}).state,pending.state);
  emailFetcher=async(url,options)=>{a.equal(url,'https://oauth2.googleapis.com/token');a.equal(options.body.get('redirect_uri'),u.searchParams.get('redirect_uri'));a.equal(options.body.get('code_verifier'),pending.verifier);a.equal(options.body.get('grant_type'),'authorization_code');for(const key of ['client_id','client_secret','code','code_verifier','redirect_uri','grant_type']){a.equal(options.body.getAll(key).length,1);a(options.body.get(key));}a.equal(options.body.get('client_id'),'fixture.apps.googleusercontent.com');a.equal(options.body.get('code'),'fixture');a.equal(options.body.get('client_secret'),secret);return response(200,{access_token:secret,refresh_token:secret,scope:EMAIL_SCOPE,expires_in:3600});};
  try{const good=await fetch(pending.redirectUri+'?state='+pending.state+'&code=fixture');a.equal(good.status,200);a(!(await good.text()).includes(secret));a.deepEqual(readJsonFile(EMAIL_PENDING,{}),{});a.equal(readJsonFile(EMAIL_TOKENS,{}).refresh_token,secret);a.equal(emailCallback,null);a(!JSON.stringify(emailLoad()).includes(secret));}finally{emailFetcher=fetch;if(emailCallback){await new Promise(r=>emailCallback.close(r));emailCallback=null;}}
@@ -2687,4 +2743,21 @@ if(SEAL_MODE){
  if(manifest.files.some(f=>sha256File(path.join(ROOT,f.path))!==f.sha256))throw Error('Seal mismatch');
  console.log(JSON.stringify({manifest:'manifest.json',sha256:sha256File(path.join(ROOT,'manifest.json')),changed}));
  }catch{console.error('SEAL_FAILED');process.exitCode=1;}
+}
+
+async function emailReportingRegressionChecks(){
+ const a=require('node:assert/strict'),original=emailFetcher;let sends=0;
+ const reset=()=>{testJsonStore.delete(EMAIL_REPORT);emailPrivateWrite(EMAIL_CONFIG,{clientId:'fixture.apps.googleusercontent.com'});emailPrivateWrite(EMAIL_TOKENS,{access_token:'PRIVATE_FIXTURE',scope:EMAIL_SCOPE+' '+EMAIL_SEND_SCOPE,expiresAt:Date.now()+3600000});};
+ try{
+  reset();let raw;
+  emailFetcher=async(u,o)=>{if(u.endsWith('/profile'))return new Response(JSON.stringify({emailAddress:'fixture@example.test'}));sends++;raw=JSON.parse(o.body).raw;return new Response('{}');};
+  await emailReport('published','run1');await emailReport('published','run1');a.equal(sends,1);
+  const mime=Buffer.from(raw,'base64url').toString();a(mime.includes('To: fixture@example.test'));a(!mime.includes('PRIVATE_FIXTURE'));a(mime.includes('Content-Type: text/plain'));
+  const body=Buffer.from(mime.split('\r\n\r\n')[1].replace(/\s/g,''),'base64').toString();a(body.includes('Timestamp Europe/Rome:'));a(body.includes('Command/run id: run1'));a(!body.includes('PRIVATE_FIXTURE'));
+  for(const status of [429,500,403]){reset();sends=0;emailFetcher=async(u)=>{if(u.endsWith('/profile'))return new Response(JSON.stringify({emailAddress:'fixture@example.test'}));sends++;return new Response('{}',{status});};await emailReport('gate','run2');a.equal(sends,status===403?1:2);a.equal(readJsonFile(EMAIL_REPORT,{}).last.status,'delivery_failed');await emailReport('gate','run2');a.equal(sends,status===403?1:2);}
+  reset();sends=0;emailFetcher=async(u)=>{if(u.endsWith('/profile'))return new Response(JSON.stringify({emailAddress:'fixture@example.test'}));sends++;throw Error('PRIVATE_NETWORK');};await emailReport('review','run3');a.equal(sends,1);a(!JSON.stringify(readJsonFile(EMAIL_REPORT,{})).includes('PRIVATE'));
+  reset();emailPrivateWrite(EMAIL_TOKENS,{access_token:'PRIVATE_FIXTURE',scope:EMAIL_SCOPE});sends=0;await emailReport('published','run4');a.equal(sends,0);a.equal(emailStatus().reauthorizationRequired,true);a.equal(readJsonFile(EMAIL_REPORT,{}).last.event,'oauth');
+  a.throws(()=>emailReportingConfig({supervisor:'bad\r\nBcc: other@example.test'}));emailReportingConfig({supervisor:'supervisor@example.test'});a.equal(emailConfig().supervisor,'supervisor@example.test');
+  console.log(JSON.stringify({gmailReporting:'PASS',retryLimit:'PASS',deduplication:'PASS',mimePrivacy:'PASS',reauthorization:'PASS'}));
+ }finally{emailFetcher=original;}
 }
