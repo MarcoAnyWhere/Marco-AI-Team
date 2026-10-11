@@ -64,7 +64,7 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
   </div>
   <div id="devTools" class="row hidden">
     <button class="secondary devTpl" data-tpl="Implementa questa modifica in Marco AI Team mantenendo compatibilità Windows, zero costi variabili e senza toccare dati personali:\n\n">Nuova modifica</button>
-    <button id="applyDev" class="hidden">Applica modifiche</button>
+    <span class="muted">Apply automatico ? test + review richiesti</span>
     <button class="secondary" id="publishDev">Pubblica su GitHub</button>
     <span class="muted" id="devStatus"></span>
   </div>
@@ -314,28 +314,6 @@ document.querySelectorAll(".devTpl").forEach(b=>{
   };
 });
 
-$("#applyDev").onclick=async()=>{
-  if(!pendingDevId)return;
-  if(!confirm("Applicare le modifiche? Verrà creato un backup automatico e Marco AI Team si riavvierà."))return;
-  $("#applyDev").disabled=true;
-  $("#devStatus").textContent="Applicazione e riavvio...";
-  try{
-    const r=await fetch("/api/dev/apply",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({devId:pendingDevId})
-    });
-    const x=await r.json();
-    if(!r.ok||!x.ok)throw new Error(x.error||"Applicazione fallita");
-    if(x.runId)attachMonitor(x.runId);
-    $("#devStatus").textContent=x.message||"Riavvio...";
-    pollBackendVersion(true);
-  }catch(e){
-    $("#applyDev").disabled=false;
-    $("#devStatus").textContent=`Errore: ${e.message}`;
-  }
-};
-
 $("#publishDev").onclick=async()=>{
   if(!confirm("Pubblicare la versione installata nel repository GitHub Marco-AI-Team?"))return;
   $("#publishDev").disabled=true;
@@ -435,7 +413,7 @@ if(document.readyState==="complete"){
 $("#go").onclick=async()=>{
   const task=$('#task').value.trim();if(!task)return;
   $('#go').disabled=true;$('#busy').textContent='Avvio attività…';
-  try{await startBackground('/api/chat',{task,mode:$('#mode').value,agent:$('#agent').value});}
+  try{await startBackground('/api/chat',{task,mode:$('#mode').value,agent:$('#agent').value,...($('#agent').value==='dev'?{auto:{pipeline:'safe-v1'}}:{})});}
   catch(e){$('#busy').textContent=e.message;$('#go').disabled=false;}
 };
 
@@ -449,7 +427,6 @@ function renderRuntimeResult(x){
   if(x.live)showJobReport(x.live);
   if(!x.final)return;
   lastRun=x;pendingDevId=x.devId||null;
-  $('#applyDev').classList.toggle('hidden',!pendingDevId);$('#applyDev').disabled=false;
   if(x.devId){$('#agent').value='dev';syncAgentUI();$('#devStatus').textContent='Staging pronto · '+x.nextVersion;}
   $('#answer').textContent=x.final;$('#route').textContent=' · '+x.route;
   $('#trace').textContent=(x.trace||[]).map(t=>t.agent+' · '+t.status+'\n'+t.result).join('\n\n')+(x.changedFiles?.length?'\n\nFile modificati: '+x.changedFiles.join(', '):'');$('#result').classList.remove('hidden');loadHistory().catch(()=>{});
@@ -463,6 +440,7 @@ function attachMonitor(id){
     $('#activityBox').classList.remove('hidden');
     const icon=x.status==='running'?'●':x.status==='completed'?'✓':x.status==='cancelled'?'⚠':'✕';
     $('#activityInfo').textContent=icon+' '+x.agent+' · '+x.route+' · '+x.phase+' · '+x.status+' · avanzamento stimato '+Math.round(x.progress)+'%';
+    if(x.agent==='dev')$('#devStatus').textContent=x.pipelineStatus||x.phase;
     $('#activityProgress').value=x.progress;
     $('#activityTime').textContent='Tempo trascorso: '+durationText(x.elapsedMs)+' · Tempo residuo stimato: '+etaText(x)+' · Affidabilità: '+({low:'bassa',medium:'media',high:'alta'}[x.etaConfidence]||'bassa');
     $('#activityLast').textContent='Ultima attività: '+(x.events.at(-1)?.message||x.message||'');

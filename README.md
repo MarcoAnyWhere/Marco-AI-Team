@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.18
+3.3.19
 
 ## Email/Event Loop V1 (base staging 3.3.15)
 
