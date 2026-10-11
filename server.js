@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.21";
+const VERSION = "3.3.22";
 const EMAIL_TEST_MODE = process.argv.includes('--email-event-test');
 const SEAL_MODE = process.argv.includes("--seal-dev-stage");
 const WORK_TEST_MODE = SEAL_MODE || EMAIL_TEST_MODE || process.argv.includes("--work-v2-test");
@@ -487,6 +487,7 @@ async function executeAutonomousDev(task, handlers = {}) {
     phase('validating',40);
     const validate = handlers.validate || (() => validateDevStage(stage));
     const validation = await validate(result);
+    result = {...result,validationStatus:'passed'};
     const seal = handlers.seal || (() => stageSeal(stage));
     const before = seal();
     const preliminary = pipelineGuard(result,validation,{decision:'APPROVE',criticalWarnings:[],testsPassed:true});
@@ -503,7 +504,7 @@ async function executeAutonomousDev(task, handlers = {}) {
       try { review = structured(await (handlers.fallbackReview || codexReadonlyDevReview)(result,validation)); }
       catch {
         if (seal() !== before) return stop('Staging cambiato durante la review fallback',result);
-        return stop('FALLBACK_UNAVAILABLE_OR_INVALID',{...result,reviewerFailureCause:'CODEX_READONLY_UNAVAILABLE_OR_INVALID'});
+        return stop('FALLBACK_UNAVAILABLE_OR_INVALID',{...result,reviewerFailureCause:'CODEX_READONLY_UNAVAILABLE_OR_INVALID',reviewStatus:'unavailable'});
       }
       if (seal() !== before) return stop('Staging cambiato durante la review fallback',result);
     }
@@ -1913,6 +1914,7 @@ async function safetyRegressionChecks() {
    apply=0;let sealValue='original';
    const outcome=await auto('task',{...handlers,seal:()=>sealValue,review:async()=>{throw Error('quota');},fallbackReview:async()=>{if(fallback==='unavailable')throw Error('private');if(fallback==='mutation')sealValue='changed';return fallback==='invalid'?{}:{...approval,decision:fallback==='mutation'?'APPROVE':fallback};}});
    assert.equal(outcome.pipelineStatus,'needs_review');assert.equal(apply,0);
+   if(['invalid','unavailable'].includes(fallback)){assert.equal(outcome.validationStatus,'passed');assert.equal(outcome.reviewStatus,'unavailable');assert.equal(outcome.reviewReason,'FALLBACK_UNAVAILABLE_OR_INVALID');}
  }
  assert(!html.includes('applyDev'));assert(!html.includes('Applica modifiche'));assert(html.includes('Apply automatico ? test + review richiesti'));assert(html.includes("auto:{pipeline:'safe-v1'}"));
  pass('fallback isolato: decisioni primarie definitive, invalid/quota, rifiuto e seal; UI Apply automatico');
@@ -2024,12 +2026,33 @@ const EMAIL_STATES=['new','reviewed','ignored','processed'];
 let emailBusy=false,emailCallback=null,emailFetcher=fetch,emailClaim=null;
 let emailDiagnostic={lastErrorClass:null,lastErrorAt:null};
 const EMAIL_OAUTH_CODES=new Set(['invalid_client','invalid_grant','redirect_uri_mismatch','access_denied','unauthorized_client','invalid_request']);
-// Never echo provider prose: it can contain credentials or reflected request data.
+// Provider prose crosses the diagnostic boundary only after redaction.
+function emailSanitizeOAuthDescription(raw,secrets=[]){
+ if(typeof raw!=='string'||raw.length>16384)return '';
+ let text=raw;
+ // Decode reflected encodings before removing secrets, markup and URLs.
+ for(let i=0;i<3;i++){
+  text=text.replace(/(?:%[0-9a-f]{2})+/gi,v=>{try{return decodeURIComponent(v);}catch{return '[redacted]';}})
+   .replace(/&#(?:x([0-9a-f]+)|(\d+));?/gi,(_,h,d)=>{const n=parseInt(h||d,h?16:10);return n<=0x10ffff?String.fromCodePoint(n):'';})
+   .replace(/&(?:lt|gt|quot|apos|amp);/gi,v=>({'&lt;':'<','&gt;':'>','&quot;':'"','&apos;':"'",'&amp;':'&'}[v.toLowerCase()]));
+ }
+ for(const secret of secrets.filter(v=>typeof v==='string'&&v))text=text.split(secret).join('[redacted]');
+ text=text.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,' ').replace(/<[^>]*>/g,' ')
+  .replace(/(?:[a-z][a-z0-9+.-]*:\/\/|www\.)[^\s<>"']+/gi,'[redacted]')
+  .replace(/\?[^\s<>"']+/g,'[redacted]')
+  .replace(/\b(code|authorization[_ ]code|access_token|refresh_token|code_verifier|client_secret|state)\b\s*(?:=|:)\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,'$1=[redacted]')
+  .replace(/[A-Za-z0-9_+./=-]+/g,v=>{
+   if(['client_id','client_secret','code','code_verifier','redirect_uri','grant_type','authorization_code','access_token','refresh_token','state','scope'].includes(v))return v;
+   return v.length>=24||/[0-9_+=/]/.test(v)||/[a-z][A-Z]|[A-Z]{2}[a-z]/.test(v)?'[redacted]':v;
+  })
+  .replace(/[^\x20-\x7e\u00c0-\u024f]/g,' ').replace(/\s+/g,' ').trim();
+ return text.slice(0,240);
+}
 const EMAIL_OAUTH_DESCRIPTIONS=Object.freeze({invalid_client:'Client OAuth non valido. Verifica il Client ID App desktop.',invalid_grant:'Autorizzazione non valida o scaduta. Ripeti il consenso.',redirect_uri_mismatch:'Redirect URI non corrispondente.',invalid_request:'Richiesta OAuth non valida.',access_denied:'Accesso negato.',unauthorized_client:'Client non autorizzato.',token_endpoint_rejected:'Richiesta rifiutata dal servizio OAuth.'});
 function emailOAuthDescription(code){return Object.hasOwn(EMAIL_OAUTH_DESCRIPTIONS,code)?EMAIL_OAUTH_DESCRIPTIONS[code]:EMAIL_OAUTH_DESCRIPTIONS.token_endpoint_rejected;}
 const EMAIL_CLASSES=new Set('CALLBACK_INVALID GOOGLE_AUTH_ERROR STATE_MISMATCH PENDING_MISSING PENDING_EXPIRED PENDING_STORAGE_ERROR TOKEN_TRANSPORT_ERROR TOKEN_ENDPOINT_REJECTED TOKEN_RESPONSE_INVALID SCOPE_REQUIRED_MISSING TOKEN_STORAGE_ERROR PENDING_CLEANUP_ERROR OAUTH_BUSY OAUTH_OK'.split(' '));
 function emailError(k,status=400){return Object.assign(httpError(status,EMAIL_CLASSES.has(k)?k:'CALLBACK_INVALID'),{errorClass:EMAIL_CLASSES.has(k)?k:'CALLBACK_INVALID'});}
-function emailDiagnose(k,e){emailDiagnostic={lastErrorClass:EMAIL_CLASSES.has(k)?k:'CALLBACK_INVALID',lastErrorAt:new Date().toISOString(),...(e?.errorClass==='TOKEN_ENDPOINT_REJECTED'?{httpStatus:e.httpStatus,oauthCode:EMAIL_OAUTH_CODES.has(e.oauthCode)?e.oauthCode:'token_endpoint_rejected',oauthDescription:emailOAuthDescription(e.oauthCode)}:{})};}
+function emailDiagnose(k,e){emailDiagnostic={lastErrorClass:EMAIL_CLASSES.has(k)?k:'CALLBACK_INVALID',lastErrorAt:new Date().toISOString(),...(e?.errorClass==='TOKEN_ENDPOINT_REJECTED'?{httpStatus:e.httpStatus,oauthCode:EMAIL_OAUTH_CODES.has(e.oauthCode)?e.oauthCode:'token_endpoint_rejected',oauthDescription:emailSanitizeOAuthDescription(e.oauthDescription)||emailOAuthDescription(e.oauthCode)}:{})};}
 function emailScopeValid(scope){return typeof scope==='string'&&new Set(scope.trim().split(/\s+/)).has(EMAIL_SCOPE);}
 function emailValidateToken(t){if(!t||typeof t.access_token!=='string'||!t.access_token||t.refresh_token!==undefined&&(typeof t.refresh_token!=='string'||!t.refresh_token)||!Number.isFinite(t.expires_in)||t.expires_in<=0)throw emailError('TOKEN_RESPONSE_INVALID',502);if(!emailScopeValid(t.scope))throw emailError('SCOPE_REQUIRED_MISSING',502);}
 function emailPersistToken(t){emailValidateToken(t);try{const previous=readJsonFile(EMAIL_TOKENS,{});emailPrivateWrite(EMAIL_TOKENS,{access_token:t.access_token,refresh_token:t.refresh_token||previous.refresh_token||null,expiresAt:Date.now()+Math.min(3600,t.expires_in)*1000});}catch{throw emailError('TOKEN_STORAGE_ERROR',500);}}
@@ -2156,9 +2179,9 @@ async function emailCodeExchange(b){
  let r;try{r=await emailFetcher('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b,signal:controller.signal,redirect:'error'});}catch{throw emailError('TOKEN_TRANSPORT_ERROR',502);}
  const chunks=[];let size=0;
  if(!r.ok){
-   let code='token_endpoint_rejected';
-   try{for await(const chunk of r.body){size+=chunk.length;if(size>16384)throw Error();chunks.push(Buffer.from(chunk));}const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(EMAIL_OAUTH_CODES.has(body.error))code=body.error;}catch{}
-   throw Object.assign(emailError('TOKEN_ENDPOINT_REJECTED',502),{httpStatus:Number.isInteger(r.status)&&r.status>=100&&r.status<=599?r.status:502,oauthCode:code});
+   let code='token_endpoint_rejected',description='';
+   try{for await(const chunk of r.body){size+=chunk.length;if(size>16384)throw Error();chunks.push(Buffer.from(chunk));}const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(EMAIL_OAUTH_CODES.has(body.error))code=body.error;description=emailSanitizeOAuthDescription(body.error_description,[...b.values(),...['code','access_token','refresh_token','code_verifier','client_secret'].map(k=>body[k])]);}catch{}
+   throw Object.assign(emailError('TOKEN_ENDPOINT_REJECTED',502),{httpStatus:Number.isInteger(r.status)&&r.status>=100&&r.status<=599?r.status:502,oauthCode:code,oauthDescription:description});
  }
  try{for await(const chunk of r.body){size+=chunk.length;if(size>1048576)throw Error();chunks.push(Buffer.from(chunk));}}catch{throw emailError('TOKEN_TRANSPORT_ERROR',502);}
  try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw emailError('TOKEN_RESPONSE_INVALID',502);}
@@ -2543,7 +2566,7 @@ async function emailRegressionChecks(){
  await check('E16',()=>a.throws(()=>emailCallbackValidate({...req,url:'/?state=bad&code=x'},p)));
  await check('E17',async()=>{emailPrivateWrite(EMAIL_CONFIG,{clientId:'fixture.apps.googleusercontent.com'});const o=await emailOAuth(),u=new URL(o.url),pending=readJsonFile(EMAIL_PENDING,{});a.equal(pending.redirectUri,'http://127.0.0.1:'+pending.port);a.equal(u.searchParams.get('redirect_uri'),pending.redirectUri);a.match(pending.verifier,/^[A-Za-z0-9_-]{43}$/);a.equal(u.searchParams.get('state'),pending.state);a.equal(new URL(pending.redirectUri).pathname,'/');a.equal(new URL(pending.redirectUri).hostname,'127.0.0.1');a.equal(u.searchParams.get('scope'),EMAIL_SCOPE);a.equal(u.searchParams.get('access_type'),'offline');a.equal(u.searchParams.get('prompt'),'consent');a.equal(u.searchParams.get('code_challenge_method'),'S256');a.equal(u.searchParams.get('code_challenge'),crypto.createHash('sha256').update(pending.verifier).digest('base64url'));a(!JSON.stringify(emailLoad()).includes(pending.verifier));
  const bad=await fetch(pending.redirectUri+'?state=wrong&code=fixture');a.equal(bad.status,400);a.equal(readJsonFile(EMAIL_PENDING,{}).state,pending.state);
- emailFetcher=async(url,options)=>{a.equal(url,'https://oauth2.googleapis.com/token');a.equal(options.body.get('redirect_uri'),u.searchParams.get('redirect_uri'));a.equal(options.body.get('code_verifier'),pending.verifier);a.equal(options.body.get('grant_type'),'authorization_code');return response(200,{access_token:secret,refresh_token:secret,scope:EMAIL_SCOPE,expires_in:3600});};
+ emailFetcher=async(url,options)=>{a.equal(url,'https://oauth2.googleapis.com/token');a.equal(options.body.get('redirect_uri'),u.searchParams.get('redirect_uri'));a.equal(options.body.get('code_verifier'),pending.verifier);a.equal(options.body.get('grant_type'),'authorization_code');for(const key of ['client_id','code','code_verifier','redirect_uri','grant_type']){a.equal(options.body.getAll(key).length,1);a(options.body.get(key));}a.equal(options.body.get('client_id'),'fixture.apps.googleusercontent.com');a.equal(options.body.get('code'),'fixture');return response(200,{access_token:secret,refresh_token:secret,scope:EMAIL_SCOPE,expires_in:3600});};
  try{const good=await fetch(pending.redirectUri+'?state='+pending.state+'&code=fixture');a.equal(good.status,200);a.deepEqual(readJsonFile(EMAIL_PENDING,{}),{});a.equal(readJsonFile(EMAIL_TOKENS,{}).refresh_token,secret);a.equal(emailCallback,null);a(!JSON.stringify(emailLoad()).includes(secret));}finally{emailFetcher=fetch;if(emailCallback){await new Promise(r=>emailCallback.close(r));emailCallback=null;}}
  });
  await check('E18',()=>{a.throws(()=>emailCallbackValidate({...req,socket:{remoteAddress:'192.0.2.1'}},p));a.throws(()=>emailCallbackValidate({...req,url:'/wrong?state=state&code=x'},p));a.equal(emailCallbackValidate(req,p),'fixture');});
@@ -2601,7 +2624,10 @@ async function emailOAuthRegressionChecks(){
  ['PENDING_MISSING',(r,p)=>Object.keys(p).forEach(k=>delete p[k])]
  ])await check(async()=>{const p=pending(),r=req(p);modify(r,p);reset(p);mock(token(EMAIL_SCOPE));const out=res();await emailHandleCallback(r,out,c,cb());a(out.html.includes(kind));a.equal(exchanges,0);});
  for(const kind of ['TOKEN_ENDPOINT_REJECTED','TOKEN_TRANSPORT_ERROR','TOKEN_RESPONSE_INVALID'])await check(async()=>{const p=pending();reset(p);emailFetcher=async()=>{exchanges++;if(kind==='TOKEN_TRANSPORT_ERROR')throw Error(markers[6]);return kind==='TOKEN_RESPONSE_INVALID'?response(200,{access_token:markers[4]}):response(400,{error:markers[6]});};const r=res();await emailHandleCallback(req(p),r,c,cb());a(r.html.includes(kind));a.equal(exchanges,1);});
- for(const code of [...EMAIL_OAUTH_CODES,'unknown'])await check(async()=>{const p=pending();reset(p);emailFetcher=async()=>response(400,{error:code,error_description:markers.join(' ')+' <script>evil</script>',code:markers[0],access_token:markers[4],refresh_token:markers[5],code_verifier:markers[2],client_secret:c.clientSecret});const r=res();await emailHandleCallback(req(p),r,c,cb());a(r.html.includes('HTTP 400'));a.equal(emailDiagnostic.oauthCode,code==='unknown'?'token_endpoint_rejected':code);a.equal(emailDiagnostic.oauthDescription,emailOAuthDescription(code));a(r.html.includes(emailDiagnostic.oauthDescription));outputs.push(JSON.stringify(emailDiagnostic));if(code==='invalid_client')a(r.html.includes('App desktop'));});
+ for(const code of [...EMAIL_OAUTH_CODES,'unknown'])await check(async()=>{const p=pending();reset(p);emailFetcher=async()=>response(400,{error:code,error_description:markers.join(' ')+' <script>evil</script>',code:markers[0],access_token:markers[4],refresh_token:markers[5],code_verifier:markers[2],client_secret:c.clientSecret});const r=res();await emailHandleCallback(req(p),r,c,cb());a(r.html.includes('HTTP 400'));a.equal(emailDiagnostic.oauthCode,code==='unknown'?'token_endpoint_rejected':code);a(emailDiagnostic.oauthDescription.length<=240);a(!emailDiagnostic.oauthDescription.includes('<'));a(r.html.includes(emailDiagnostic.oauthDescription));outputs.push(JSON.stringify(emailDiagnostic));outputs.push(JSON.stringify({status:emailStatus(),state:emailLoad()}));});
+ for(const description of ['Missing required parameter: client_secret','Malformed redirect_uri','Invalid parameter code_verifier'])await check(async()=>{const p=pending();reset(p);emailFetcher=async()=>response(400,{error:'invalid_request',error_description:description});const r=res();await emailHandleCallback(req(p),r,c,cb());a.equal(emailDiagnostic.oauthDescription,description);a(r.html.includes(description));a.equal(emailStatus().oauthDescription,description);});
+ await check(async()=>{const p=pending();reset(p);const entropy=crypto.randomBytes(32).toString('base64url');markers.push(entropy);const malicious='<script>'+markers.join(' ')+'</script> '+markers.join(' ')+' https://evil.test/?code='+markers[0]+' ?refresh_token='+markers[5]+' code='+markers[0]+' access_token='+markers[4]+' refresh_token='+markers[5]+' code_verifier='+p.verifier+' client_secret='+c.clientSecret+' '+entropy;const logs=[],originalLog=console.log,originalError=console.error;console.log=(...v)=>logs.push(v.join(' '));console.error=(...v)=>logs.push(v.join(' '));try{emailFetcher=async()=>response(400,{error:'invalid_request',error_description:malicious});const r=res();await emailHandleCallback(req(p),r,c,cb());outputs.push(JSON.stringify({status:emailStatus(),state:emailLoad(),diagnostic:emailDiagnostic,logs}));a(emailDiagnostic.oauthDescription.length<=240);a(!r.html.includes('evil.test'));a(!r.html.includes('<script>'));}finally{console.log=originalLog;console.error=originalError;}});
+ await check(()=>{for(const raw of ['&lt;script&gt;evil&lt;/script&gt; Missing required parameter: client_secret','%3Cscript%3Eevil%3C%2Fscript%3E Missing required parameter: client_secret'])a.equal(emailSanitizeOAuthDescription(raw),'Missing required parameter: client_secret');a.equal(emailSanitizeOAuthDescription('Malformed '.repeat(100)).length,240);for(const raw of [null,{},42])a.equal(emailSanitizeOAuthDescription(raw),'');});
  for(const raw of [markers[6],'{"error":"invalid_grant"'+markers[6],markers[6].repeat(2000)])await check(async()=>{const p=pending();reset(p);emailFetcher=async()=>({ok:false,status:401,body:(async function*(){yield Buffer.from(raw);})()});const r=res();await emailHandleCallback(req(p),r,c,cb());a.equal(emailDiagnostic.oauthCode,'token_endpoint_rejected');a(r.html.includes('HTTP 401'));});
  await check(async()=>{const p=pending();reset(p);mock(token(EMAIL_SCOPE));emailPrivateWrite=(f,v)=>{if(f===EMAIL_TOKENS)throw Error(markers[4]);return privateWrite(f,v);};const r=res();await emailHandleCallback(req(p),r,c,cb());a(r.html.includes('TOKEN_STORAGE_ERROR'));emailPrivateWrite=privateWrite;});
  await check(async()=>{const p=pending();reset(p);mock(token(EMAIL_SCOPE));emailPrivateWrite=(f,v)=>{if(f===EMAIL_PENDING)throw Error(markers[2]);return privateWrite(f,v);};const r=res();await emailHandleCallback(req(p),r,c,cb());a.equal(r.status,200);a.equal(emailStatus().connected,true);a.equal(emailDiagnostic.lastErrorClass,'PENDING_CLEANUP_ERROR');a.equal(emailClaim,null);emailPrivateWrite=privateWrite;});

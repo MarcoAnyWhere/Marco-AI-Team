@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.21
+3.3.22
 
 Patch nuova dalla base installata 3.3.19: fallback reviewer Codex read-only safe-v1.
 Sessione CLI headless ephemeral con ignore-user-config, ignore-rules, skip-git-repo-check,
@@ -325,3 +325,22 @@ Riferimento: https://developers.google.com/identity/protocols/oauth2/native-app
 
 Esito controlli staging: OAuth 31/31 (incluso vettore RFC7636), race 3/3, privacy PASS, HTTP Email 16/16, Email/Event 21/21, adversarial Email 12/12; Work V2 e gate pipeline simulati PASS; sintassi server/updater/script cockpit PASS. Review indipendente: PASS.
 Stato consegna: `needs_review`, nessun Apply, backup installato, riavvio o Publish eseguito. Gate operativo bloccato dai vincoli espliciti: solo file applicativi nello staging, nessuna scrittura fuori directory, nessuna modifica remota. Il consenso Google reale resta da verificare nell'ambiente installato.
+
+
+### Diagnostica OAuth Gmail (base 3.3.21)
+Il POST e la configurazione OAuth restano invariati. La descrizione del provider
+viene filtrata prima di inserirla nell'errore: segreti riflessi, HTML, URL, query
+e valori sospetti vengono rimossi o mascherati. I nomi dei parametri restano
+leggibili; testi non stringa, troppo grandi o non interpretabili usano la
+descrizione generica. Assunzione conservativa: parole lunghe o identificatori
+sospetti possono essere mascherati anche quando innocui. Nessun payload completo
+viene salvato. Nessun servizio a consumo ? introdotto.
+
+Verifica locale: email-event-test (OAuth 36/36, race 3/3, leak scan PASS,
+HTTP 16/16, EmailEvent 21/21, avversariali 12/12); work-v2-test e safety
+13/13; controlli sintattici Node. Store di test in memoria, endpoint simulati.
+Staging preparato per il gate Apply; Apply e pubblicazione non eseguiti.
+La review esterna non ? stata invocata in questa sessione. safe-v1 distingue
+validationStatus=passed e reviewStatus=unavailable in needs_review quando
+entrambi i reviewer inclusi sono indisponibili o restituiscono output invalido.
+Il consenso reale resta da verificare nell'ambiente installato.
