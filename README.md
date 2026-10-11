@@ -3,7 +3,71 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.15
+3.3.16
+
+## Email/Event Loop V1 (base staging 3.3.15)
+
+Zero costi variabili e zero dipendenze aggiunte: Node.js built-in, Gmail dell'utente,
+nessun fallback a servizi a consumo. Codex Plus, Google AI Plus e Ollama restano
+nei percorsi esistenti. Nessuna email viene inviata automaticamente agli agenti.
+
+Nel cockpit Email/Event salva il Client ID di un client OAuth desktop Google
+configurato dall'utente, quindi scegli Connetti Gmail. L'autorizzazione richiede
+esclusivamente Gmail readonly, usa PKCE S256 e state monouso; il callback e un
+listener separato su 127.0.0.1 con porta dinamica e durata massima di tre minuti.
+La API principale resta su 127.0.0.1:3210. Non inserire password, OTP o app-password.
+Un eventuale clientSecret richiesto dal client desktop deve essere configurato
+manualmente solo nel file locale protetto data/email-event/config.json; non
+esiste un endpoint o campo UI per il secret. Non inserirlo in note, history,
+Drive o GitHub. config.json, tokens.json e pending.json restano sotto data/.
+Scritture sensibili temp+rename; su Windows vengono applicate ACL per l'utente
+corrente, con errore controllato se la protezione non riesce. L'updater preserva data/.
+
+Configura la cartella Drive tramite Remote: EmailEvent/state.json deriva da
+remoteConfig.folder e resta separato da Remote/. Il file contiene eventi,
+journal delle transizioni, stato ultimo sync e cursore della finestra temporale.
+Una singola scrittura atomica aggiorna l'intero snapshot autorevole. La corruzione
+del file blocca le operazioni senza sostituire silenziosamente lo stato.
+
+Sincronizza ora recupera al massimo 25 messaggi degli ultimi 14 giorni, solo
+metadati: nessun body, allegato, invio, modifica label o Calendar. Oggetto troncato
+a 200 caratteri, mittente pseudonimizzato tramite hash; rendering UI come testo.
+Dedup primaria Gmail message ID; in assenza usa hash dei metadati di identita
+normalizzati prima del troncamento (limite 64 KiB per header). Senza Message-ID
+affidabile conserva record separati. Rediscovery conserva stato, nota e timestamp.
+Header duplicati, eccessivi o record malformati sono isolati. Il fallback A9
+garantisce due eventi con Message-ID differenti dopo il carattere 200.
+
+Reviewed, Ignora e Processed aggiornano esclusivamente lo snapshot Drive e una
+nota opzionale di massimo 1000 caratteri. I campi email e le note sono input
+non attendibile. Nessuna copia dei segreti OAuth nel journal o nei log tecnici.
+Timeout Google 10 secondi, risposte limitate a 1 MiB, massimo tre tentativi con
+backoff 100/200 ms per rete, 429 e 5xx. Nessun polling Gmail automatico.
+
+API locali: GET /api/email/status, GET /api/email/events; POST /api/email/config
+(solo clientId), /oauth/start, /sync (oggetto vuoto), /event (eventId, status,
+nota opzionale). Il callback GET /oauth/callback esiste solo sul listener dedicato.
+POST JSON UTF-8, massimo 128 KiB, schema stretto e policy Origin/cross-site
+esistente. GET stato restituisce solo configurazione non sensibile e contatori.
+
+Test permanenti senza accesso a data reale:
+
+```
+node --check server.js
+node server.js --email-event-test
+node server.js --work-v2-test
+```
+
+La validazione staging esegue entrambe le suite. E1-E20 e A9, HTTP su porta
+effimera, storage in memoria e dodici adversarial mirati; nessuna credenziale
+reale, chiamata live Google o nuova dipendenza. LIVE_GMAIL_TESTED=false.
+Limiti V1: finestra recente limitata, non archivio completo; usare una sola
+istanza scrivente, evitare scritture concorrenti dello stesso snapshot da altri
+PC Drive. Riconnettere Gmail dopo cambio client o revoca. La protezione ACL e
+l'OAuth reale richiedono verifica nell'ambiente utente. Non sono stati eseguiti
+Apply, Publish, restart o push. Per rispettare il divieto di accesso fuori dallo
+staging, la provenienza completa dalla base installata non e stata verificata;
+i sei file critici corrispondono agli hash 3.3.15 forniti.
 
 ## Agenti
 - Generale

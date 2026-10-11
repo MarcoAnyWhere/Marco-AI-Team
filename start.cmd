@@ -22,9 +22,10 @@ if errorlevel 1 (
   exit /b 1
 )
 if not exist ".git" git init >nul 2>&1
-echo Avvio Marco AI Team v3.3.15 - ZERO COSTI VARIABILI
+echo Avvio Marco AI Team v3.3.16 - ZERO COSTI VARIABILI
 set "PORT=3210"
 start "" http://127.0.0.1:3210
 node "%~dp0server.js"
 echo Server terminato.
 pause
+

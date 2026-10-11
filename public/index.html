@@ -141,6 +141,14 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
 </div>
 </div>
 
+<div class="box" style="margin:14px">
+ <h2>Email / Event</h2>
+ <p class="muted">Gmail in sola lettura, sincronizzazione manuale di 25 messaggi recenti. Nessun allegato o invio agli agenti AI. Stato e note nella cartella Drive EmailEvent.</p>
+ <label>Client ID OAuth desktop <input id="emailClientId" autocomplete="off" placeholder="...apps.googleusercontent.com"></label>
+ <div class="row"><button id="emailConfigure">Salva configurazione</button><button id="emailConnect">Connetti Gmail</button><button id="emailSync">Sincronizza ora</button><button id="emailReload" class="secondary">Aggiorna stato</button></div>
+ <p id="emailStatus" class="muted"></p>
+ <div style="overflow:auto"><table><thead><tr><th>Data</th><th>Mittente</th><th>Oggetto</th><th>Stato / nota locale</th></tr></thead><tbody id="emailEvents"></tbody></table></div>
+</div>
 <script>
 const $=s=>document.querySelector(s);
 // Version is stamped into HTML by the server, before any asynchronous status request.
@@ -512,6 +520,23 @@ try{const active=localStorage.getItem('marcoActiveRunId');if(active)attachMonito
 pollRemoteState().catch(()=>{});
 loadStatus().catch(e=>$("#version").textContent=e.message);
 loadHistory().catch(()=>{});
+async function emailApi(route,body){const r=await fetch('/api/email/'+route,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const x=await r.json();if(!r.ok)throw Error(x.error||'Email/Event non disponibile');return x;}
+async function emailRefresh(){
+ const s=await emailApi('status');$('#emailClientId').value=s.clientId;
+ $('#emailStatus').textContent='OAuth: '+(s.connected?'connesso':s.configured?'da connettere':'da configurare')+' | Drive: '+(s.driveConfigured?'configurato':'configura Remote')+' | '+Object.entries(s.counts).map(([k,v])=>k+': '+v).join(' · ')+' | Ultimo sync: '+(s.lastSync||'mai')+(s.error?' | '+s.error:'');
+ $('#emailSync').disabled=!s.connected||!s.driveConfigured||s.busy;
+ const table=$('#emailEvents');table.replaceChildren();if(!s.driveConfigured)return;
+ const x=await emailApi('events');for(const e of x.events){const tr=document.createElement('tr');
+ for(const value of [e.receivedAt,e.from,e.subject]){const td=document.createElement('td');td.textContent=value;tr.append(td);}
+ const td=document.createElement('td'),status=document.createElement('span'),note=document.createElement('input');status.textContent=e.status+' ';note.value=e.note||'';note.maxLength=1000;note.placeholder='Nota locale opzionale';td.append(status,note);
+ for(const [value,label] of [['reviewed','Reviewed'],['ignored','Ignora'],['processed','Processed']]){const button=document.createElement('button');button.textContent=label;button.onclick=()=>emailAction(()=>emailApi('event',{eventId:e.eventId,status:value,note:note.value}));td.append(button);}tr.append(td);table.append(tr);}
+}
+async function emailAction(action){try{await action();await emailRefresh();}catch(e){$('#emailStatus').textContent=e.message;}}
+$('#emailConfigure').onclick=()=>emailAction(()=>emailApi('config',{clientId:$('#emailClientId').value.trim()}));
+$('#emailConnect').onclick=async()=>{const tab=window.open('about:blank','_blank');try{const x=await emailApi('oauth/start',{});if(tab){tab.opener=null;tab.location=x.url;}else{$('#emailStatus').textContent='Abilita popup e ripeti dopo tre minuti';}}catch(e){if(tab)tab.close();$('#emailStatus').textContent=e.message;}};
+$('#emailSync').onclick=()=>emailAction(()=>emailApi('sync',{}));
+$('#emailReload').onclick=()=>emailAction(async()=>{});
+emailRefresh().catch(e=>$('#emailStatus').textContent=e.message);
 </script>
 </body>
 </html>

@@ -5,8 +5,9 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.15";
-const WORK_TEST_MODE = process.argv.includes("--work-v2-test");
+const VERSION = "3.3.16";
+const EMAIL_TEST_MODE = process.argv.includes('--email-event-test');
+const WORK_TEST_MODE = EMAIL_TEST_MODE || process.argv.includes("--work-v2-test");
 const testJsonStore = new Map();
 const RESTART_INSTANCE = process.env.MARCO_RESTART_INSTANCE || crypto.randomUUID();
 let autoPublishToken = process.env.MARCO_AUTO_PUBLISH_TOKEN || '';
@@ -231,6 +232,7 @@ async function validateDevStage(stage, regression = false) {
   {
     runEvent('Regressioni locali','Test di sicurezza pipeline, UI e aggiornamenti','info',96);
     await run(process.execPath,[path.join(stage,'server.js'),'--work-v2-test'],{cwd:stage,timeout:120000});
+    await run(process.execPath,[path.join(stage,'server.js'),'--email-event-test'],{cwd:stage,timeout:120000});
   }
   const required = ["server.js","public/index.html","start.cmd","updater.js","background-launcher.js","setup-autostart.cmd","disable-autostart.cmd"];
   for (const rel of required) {
@@ -1867,8 +1869,156 @@ async function safetyRegressionChecks() {
 }
 
 
+// Email/Event V1: manual metadata-only ingestion, no model or Gmail mutations.
+const EMAIL_LOCAL=path.join(ROOT,'data','email-event');
+const EMAIL_CONFIG=path.join(EMAIL_LOCAL,'config.json');
+const EMAIL_TOKENS=path.join(EMAIL_LOCAL,'tokens.json');
+const EMAIL_PENDING=path.join(EMAIL_LOCAL,'pending.json');
+const EMAIL_SCOPE='https://www.googleapis.com/auth/gmail.readonly';
+const EMAIL_STATES=['new','reviewed','ignored','processed'];
+let emailBusy=false,emailCallback=null,emailFetcher=fetch;
+function emailHash(v){return crypto.createHash('sha256').update(v).digest('hex');}
+function emailStorePath(){
+ if(!remoteConfig.folder||!path.isAbsolute(remoteConfig.folder))throw httpError(409,'Configura la cartella Drive Remote');
+ const folder=path.resolve(remoteConfig.folder),local=path.resolve(ROOT,'data');
+ if(folder===local||folder.startsWith(local+path.sep)||local.startsWith(folder+path.sep))throw httpError(409,'Drive deve essere separato dai dati locali');
+ return path.join(folder,'EmailEvent','state.json');
+}
+function emailLoad(){
+ const file=emailStorePath();let s;
+ if(WORK_TEST_MODE)s=readJsonFile(file,{events:[],journal:[],lastSync:null,error:null,cursor:null});
+ else {try{s=JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')s={events:[],journal:[],lastSync:null,error:null,cursor:null};else throw httpError(409,'Stato Drive non leggibile: ripristino manuale richiesto');}}
+ if(!s||!Array.isArray(s.events)||!Array.isArray(s.journal)||s.events.some(e=>!e||!EMAIL_STATES.includes(e.status)||!/^[a-f0-9]{64}$/.test(e.eventId)))throw httpError(409,'Stato Drive non valido');
+ return s;
+}
+function emailPrivateWrite(file,value){
+ if(WORK_TEST_MODE)return atomicJson(file,value);
+ for(const folder of [path.join(ROOT,'data'),EMAIL_LOCAL])if(fs.existsSync(folder)&&fs.lstatSync(folder).isSymbolicLink())throw Error('Local storage link rejected');
+ fs.mkdirSync(EMAIL_LOCAL,{recursive:true,mode:0o700});
+ if(fs.existsSync(file)&&fs.lstatSync(file).isSymbolicLink())throw Error('Local storage link rejected');
+ // POSIX modes do not secure Windows ACLs. Fail closed if ACL isolation fails.
+ if(process.platform==='win32'){
+ const {execFileSync}=require('child_process');
+ const output=execFileSync('whoami.exe',['/user','/fo','csv','/nh'],{encoding:'utf8',windowsHide:true,timeout:5000});
+ const sid=output.match(/S-1-\d+(?:-\d+)+/);if(!sid)throw Error('Local protection unavailable');
+ execFileSync('icacls.exe',[EMAIL_LOCAL,'/inheritance:r','/grant:r','*'+sid[0]+':(OI)(CI)F','/Q'],{windowsHide:true,timeout:5000,stdio:'pipe'});
+ }
+ const tmp=file+'.'+crypto.randomUUID()+'.tmp';
+ try{fs.writeFileSync(tmp,JSON.stringify(value),{flag:'wx',mode:0o600});fs.renameSync(tmp,file);}finally{try{fs.unlinkSync(tmp);}catch{}}
+}
+function emailConfig(){return readJsonFile(EMAIL_CONFIG,{});}
+function emailStatus(){
+ let s={events:[],error:null},driveConfigured=false;
+ try{s=emailLoad();driveConfigured=true;}catch(e){s.error=e.status?e.message:'Stato Drive non disponibile';}
+ const c=emailConfig(),t=readJsonFile(EMAIL_TOKENS,{});
+ return {version:VERSION,configured:!!c.clientId,clientId:c.clientId||'',connected:!!(t.refresh_token||t.access_token),driveConfigured,busy:emailBusy,lastSync:s.lastSync||null,error:s.error||null,counts:Object.fromEntries(EMAIL_STATES.map(x=>[x,(s.events||[]).filter(e=>e.status===x).length]))};
+}
+function emailRaw(v){if(typeof v!=='string'||v.length>65536)throw Error('Invalid metadata');return v.normalize('NFC').replace(/[\r\n\t]+/g,' ').trim();}
+function emailRecord(raw){
+ if(!raw||typeof raw!=='object'||!raw.payload||!Array.isArray(raw.payload.headers))throw Error('Malformed record');
+ const h={};for(const x of raw.payload.headers){if(!x||typeof x.name!=='string')throw Error('Malformed header');const n=x.name.toLowerCase();if(['message-id','from','subject','date'].includes(n)){if(h[n]!==undefined)throw Error('Duplicate identity header');h[n]=emailRaw(x.value);}}
+ const id=raw.id===undefined?'':emailRaw(raw.id);if(id&&!/^[a-zA-Z0-9_-]{1,256}$/.test(id))throw Error('Invalid id');
+ const internalDate=emailRaw(String(raw.internalDate||''));if(!/^\d{1,16}$/.test(internalDate)||!Number.isFinite(new Date(Number(internalDate)).getTime()))throw Error('Invalid date');
+ // Identity is hashed BEFORE display truncation. Without reliable identity never merge.
+ const identity=id?'gmail:'+id:h['message-id']?'fallback:'+JSON.stringify([h['message-id'],internalDate,h.from||'',h.subject||'',h.date||'']):'unknown:'+crypto.randomUUID();
+ const fingerprint=emailHash(identity),now=new Date().toISOString();
+ return {eventId:fingerprint,provider:'gmail',gmailMessageId:id||null,threadId:typeof raw.threadId==='string'?raw.threadId.slice(0,256):null,internalDate,from:'sender-'+emailHash(h.from||'unknown').slice(0,12),subject:(h.subject||'(senza oggetto)').slice(0,200),receivedAt:new Date(Number(internalDate)).toISOString(),firstSeenAt:now,status:'new',statusAt:now,note:'',fingerprint};
+}
+function emailMerge(state,rows){
+ const next=structuredClone(state);next.events=next.events||[];let malformed=0,added=0;
+ for(const raw of rows){try{const e=emailRecord(raw);if(!next.events.some(x=>e.gmailMessageId?x.gmailMessageId===e.gmailMessageId:x.eventId===e.eventId)){next.events.push(e);added++;}}catch{malformed++;}}
+ return {state:next,added,malformed};
+}
+function emailSchema(b,keys){if(!b||Array.isArray(b)||typeof b!=='object'||Object.keys(b).some(k=>!keys.includes(k)))throw httpError(400,'Schema Email/Event non valido');}
+function emailUpdate(b){
+ emailSchema(b,['eventId','status','note']);if(!/^[a-f0-9]{64}$/.test(b.eventId||'')||!EMAIL_STATES.includes(b.status)||b.note!==undefined&&(typeof b.note!=='string'||b.note.length>1000))throw httpError(400,'Stato o nota non validi');
+ const s=emailLoad(),e=s.events.find(x=>x.eventId===b.eventId);if(!e)throw httpError(404,'Evento non trovato');
+ e.status=b.status;e.statusAt=new Date().toISOString();if(b.note!==undefined)e.note=b.note;
+ s.journal=[...(s.journal||[]),{eventId:e.eventId,status:e.status,at:e.statusAt}];atomicJson(emailStorePath(),s);return {ok:true};
+}
+async function emailRequest(url,options={},fetcher=emailFetcher,sleep=ms=>new Promise(r=>setTimeout(r,ms)),timeout=10000){
+ for(let attempt=0;attempt<3;attempt++){
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
+ try{
+ const r=await fetcher(url,{...options,signal:controller.signal,redirect:'error'});
+ if(!r.ok){if(r.status===429||r.status>=500)throw Object.assign(Error('retry'),{retry:true});throw httpError(502,'Google ha rifiutato la richiesta');}
+ const chunks=[];let size=0;for await(const chunk of r.body){size+=chunk.length;if(size>1048576)throw httpError(502,'Risposta Google troppo grande');chunks.push(Buffer.from(chunk));}
+ return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+ }catch(e){if(e.status||attempt===2)throw httpError(502,'Connessione Google non disponibile');}
+ finally{clearTimeout(timer);}await sleep(100*(2**attempt));
+ }throw httpError(502,'Google non disponibile');
+}
+async function emailToken(){
+ const c=emailConfig(),t=readJsonFile(EMAIL_TOKENS,{});if(!c.clientId||(!t.refresh_token&&!t.access_token))throw httpError(409,'Gmail non connesso');
+ if(t.access_token&&t.expiresAt>Date.now()+30000)return t.access_token;
+ if(!t.refresh_token)throw httpError(409,'Riconnetti Gmail');
+ const b=new URLSearchParams({client_id:c.clientId,refresh_token:t.refresh_token,grant_type:'refresh_token'});if(c.clientSecret)b.set('client_secret',c.clientSecret);
+ const n=await emailRequest('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});
+ if(typeof n.access_token!=='string'||n.scope&&n.scope!==EMAIL_SCOPE)throw httpError(502,'Token Google non valido');
+ emailPrivateWrite(EMAIL_TOKENS,{access_token:n.access_token,refresh_token:n.refresh_token||t.refresh_token,expiresAt:Date.now()+Math.min(3600,Number(n.expires_in)||0)*1000});return n.access_token;
+}
+async function emailSync(){
+ if(emailBusy)throw httpError(409,'Sincronizzazione in corso');emailBusy=true;
+ try{
+ emailLoad();const token=await emailToken(),headers={Authorization:'Bearer '+token};
+ const list=await emailRequest('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=25&q=newer_than%3A14d',{headers});
+ if(list.messages!==undefined&&!Array.isArray(list.messages))throw httpError(502,'Lista Gmail non valida');
+ const rows=[];let failed=0;
+ for(const m of (list.messages||[]).slice(0,25)){if(!m||! /^[a-zA-Z0-9_-]{1,256}$/.test(m.id||'')){failed++;continue;}
+ try{rows.push(await emailRequest('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+encodeURIComponent(m.id)+'?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=Date',{headers}));}catch{failed++;}}
+ // Reload after network I/O to preserve concurrent local reviews.
+ const result=emailMerge(emailLoad(),rows),s=result.state;s.lastSync=new Date().toISOString();s.error=failed||result.malformed?'Record non disponibili: '+(failed+result.malformed):null;
+ s.cursor={at:s.lastSync,windowDays:14};s.journal=[...(s.journal||[]),{at:s.lastSync,added:result.added,failed:failed+result.malformed}];atomicJson(emailStorePath(),s);return {ok:true,added:result.added,failed:failed+result.malformed};
+ }catch(e){try{const s=emailLoad();s.error=e.status===409?'Configura o riconnetti Gmail':'Sincronizzazione non disponibile';atomicJson(emailStorePath(),s);}catch{}throw e.status?e:httpError(502,'Sincronizzazione non disponibile');}finally{emailBusy=false;}
+}
+function emailPendingClear(){emailPrivateWrite(EMAIL_PENDING,{});}
+function emailCallbackValidate(req,p){
+ const u=new URL(req.url,'http://127.0.0.1');
+ if(req.method!=='GET'||req.socket.remoteAddress!=='127.0.0.1'||req.headers.host!=='127.0.0.1:'+p.port||u.pathname!=='/oauth/callback'||p.expiresAt<Date.now()||u.searchParams.getAll('state').length!==1||u.searchParams.get('state')!==p.state||!p.state||u.searchParams.getAll('code').length!==1||!u.searchParams.get('code')||u.searchParams.get('code').length>4096)throw httpError(400,'Callback OAuth rifiutata');
+ return u.searchParams.get('code');
+}
+async function emailOAuth(){
+ const c=emailConfig();if(!c.clientId)throw httpError(409,'Configura Client ID OAuth desktop');if(emailCallback)throw httpError(409,'OAuth gia in corso');
+ const cb=http.createServer(async(req,res)=>{
+ let consumed=false;
+ try{const p=readJsonFile(EMAIL_PENDING,{}),code=emailCallbackValidate(req,p);emailPendingClear();consumed=true;
+ const b=new URLSearchParams({client_id:c.clientId,code,code_verifier:p.verifier,redirect_uri:p.redirectUri,grant_type:'authorization_code'});if(c.clientSecret)b.set('client_secret',c.clientSecret);
+ const t=await emailRequest('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});
+ if(typeof t.access_token!=='string'||t.scope!==EMAIL_SCOPE)throw Error('Invalid scope');
+ emailPrivateWrite(EMAIL_TOKENS,{access_token:t.access_token,refresh_token:t.refresh_token||null,expiresAt:Date.now()+Math.min(3600,Number(t.expires_in)||0)*1000});res.writeHead(200,{'Content-Type':'text/plain','Cache-Control':'no-store'});res.end('Gmail connesso. Torna al cockpit.');
+ }catch{res.writeHead(400,{'Content-Type':'text/plain','Cache-Control':'no-store'});res.end('OAuth rifiutato. Ripeti dal cockpit.');}
+ finally{if(consumed){cb.close();emailCallback=null;}}
+ });
+ await new Promise((resolve,reject)=>{cb.once('error',reject);cb.listen(0,'127.0.0.1',resolve);});emailCallback=cb;
+ const verifier=crypto.randomBytes(32).toString('base64url'),state=crypto.randomBytes(32).toString('base64url'),port=cb.address().port,redirectUri='http://127.0.0.1:'+port+'/oauth/callback';
+ try{emailPrivateWrite(EMAIL_PENDING,{verifier,state,port,redirectUri,expiresAt:Date.now()+180000});}catch(e){cb.close();emailCallback=null;throw httpError(500,'Storage OAuth non disponibile');}
+ const timer=setTimeout(()=>{cb.close();emailCallback=null;try{emailPendingClear();}catch{}},180000);timer.unref();
+ cb.on('close',()=>clearTimeout(timer));
+ const u=new URL('https://accounts.google.com/o/oauth2/v2/auth');Object.entries({client_id:c.clientId,redirect_uri:redirectUri,response_type:'code',scope:EMAIL_SCOPE,state,code_challenge:crypto.createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256',access_type:'offline',prompt:'consent'}).forEach(([k,v])=>u.searchParams.set(k,v));
+ return {url:u.href};
+}
+async function emailRoute(req,res){
+ try{
+ guardWorkRequest(req);
+ if(req.method==='GET'&&req.url==='/api/email/status')return sendJson(res,200,emailStatus());
+ if(req.method==='GET'&&req.url==='/api/email/events')return sendJson(res,200,{events:emailLoad().events.slice(-100).reverse()});
+ if(req.method!=='POST')throw httpError(404,'Endpoint Email/Event non trovato');
+ if(!/^application\/json(?:\s*;\s*charset=utf-8)?\s*$/i.test(req.headers['content-type']||''))throw httpError(415,'Richiesto JSON UTF-8');
+ const b=await readJsonBody(req);
+ if(req.url==='/api/email/config'){
+ emailSchema(b,['clientId']);if(typeof b.clientId!=='string'||! /^[a-zA-Z0-9._-]{10,256}\.apps\.googleusercontent\.com$/.test(b.clientId))throw httpError(400,'Client ID non valido');
+ if(emailBusy||emailCallback)throw httpError(409,'Attendi operazione Gmail');const old=emailConfig();emailPrivateWrite(EMAIL_CONFIG,{clientId:b.clientId,...(old.clientId===b.clientId&&old.clientSecret?{clientSecret:old.clientSecret}:{})});if(old.clientId!==b.clientId)emailPrivateWrite(EMAIL_TOKENS,{});return sendJson(res,200,{ok:true});}
+ if(req.url==='/api/email/event')return sendJson(res,200,emailUpdate(b));
+ emailSchema(b,[]);
+ if(req.url==='/api/email/oauth/start')return sendJson(res,200,await emailOAuth());
+ if(req.url==='/api/email/sync')return sendJson(res,200,await emailSync());
+ throw httpError(404,'Endpoint Email/Event non trovato');
+ }catch(e){return sendJson(res,e.status||500,{error:e.status?e.message:'Email/Event non disponibile'});}
+}
+
 const server = http.createServer(async (req, res) => {
   try {
+    if(req.url.startsWith('/api/email/'))return await emailRoute(req,res);
     if(req.url.startsWith('/api/work/')||req.url==='/api/agents/work')guardWorkRequest(req);
     if(req.method==='GET'&&req.url==='/api/work/archive')return sendJson(res,200,readJsonFile(path.join(JOBS_DIR,'archive.json'),{jobs:[]}));
     if(req.method==='POST'&&req.url==='/api/work/job')return sendJson(res,200,mutateWorkJob(await readJsonBody(req)));
@@ -2158,4 +2308,58 @@ async function jobsRegressionChecks(){
  const fallback=await performLiveSearch({}, {...deps,codex:async()=>{throw Error('quota unavailable');}});assert.equal(fallback.jobs[0].fitKind,'pre-score');assert.equal(fallback.jobs[0].state,'applied');
  assert.equal(dedupeLiveJobs([j,{...j,url:j.url+'?utm_source=x'}]).jobs.length,1);assert(preScoreJob(j,liveCriteria(profile)).fit>preScoreJob({...j,title:'Junior Data Manager'},liveCriteria(profile)).fit);return 'PASS';
 }
-if(WORK_TEST_MODE)workV2RegressionChecks().catch(e=>{console.error(e);process.exitCode=1;server.close();});
+if(WORK_TEST_MODE&&!EMAIL_TEST_MODE)workV2RegressionChecks().catch(e=>{console.error(e);process.exitCode=1;server.close();});
+async function emailRegressionChecks(){
+ const a=require('node:assert/strict'),report={};remoteConfig.folder=path.join(ROOT,'mock-drive');
+ const row=(id='abc',mid='<fixture>')=>({...(id?{id}:{}),threadId:'thread',internalDate:'1700000000000',payload:{headers:[{name:'Message-ID',value:mid},{name:'From',value:'fixture@example.test'},{name:'Subject',value:'<script>alert(1)</script>'}]}});
+ const empty=()=>({events:[],journal:[],lastSync:null}),check=async(n,f)=>{await f();report[n]='PASS';};
+ await check('E1',()=>a.equal(emailMerge(empty(),[row(),row()]).state.events.length,1));
+ await check('E2',()=>{const s=emailMerge(empty(),[row()]).state,e=s.events[0];e.status='reviewed';e.note='keep';const before=JSON.stringify(e);a.equal(JSON.stringify(emailMerge(s,[row()]).state.events[0]),before);});
+ await check('E3',()=>a.equal(emailMerge(empty(),[row('a'),row('b')]).state.events.length,2));
+ await check('E4',()=>{a.equal(emailMerge(empty(),[row('', '<a>'),row('', '<b>')]).state.events.length,2);a.equal(emailMerge(empty(),[row('',''),row('','')]).state.events.length,2);});
+ await check('E5',()=>{const r=emailMerge(empty(),[null,row()]);a.equal(r.added,1);a.equal(r.malformed,1);});
+ await check('E6',()=>{atomicJson(emailStorePath(),empty());a.deepEqual(emailLoad(),empty());const src=atomicJson.toString();a(src.includes('renameSync(tmp,file)'));a(src.includes("flag:'wx'"));});
+ const secret='sensitive-fixture';
+ await check('E7',()=>{const r=row();r.access_token=secret;r.payload.headers.push({name:'Authorization',value:secret});a(!JSON.stringify(emailMerge(empty(),[r])).includes(secret));});
+ await check('E8',()=>{emailPrivateWrite(EMAIL_CONFIG,{clientId:'fixture.apps.googleusercontent.com',clientSecret:secret});emailPrivateWrite(EMAIL_TOKENS,{access_token:secret,refresh_token:secret});emailPrivateWrite(EMAIL_PENDING,{code:secret,verifier:secret});a(!JSON.stringify(emailStatus()).includes(secret));});
+ await check('E9',()=>{a.equal(emailRecord(row()).subject,'<script>alert(1)</script>');const ui=fs.readFileSync(path.join(PUBLIC,'index.html'),'utf8');a(ui.includes('td.textContent=value'));a(!ui.includes('emailEvents.innerHTML'));});
+ await check('E10',()=>{atomicJson(emailStorePath(),emailMerge(empty(),[row()]).state);for(const status of ['reviewed','ignored','processed']){emailUpdate({eventId:emailLoad().events[0].eventId,status,note:'local'});a.equal(emailLoad().events[0].status,status);}});
+ await check('E11',()=>a(!emailUpdate.toString().includes('fetch')));
+ await check('E12',async()=>{emailPrivateWrite(EMAIL_CONFIG,{});await a.rejects(emailSync,{status:409});});
+ const response=(status,data)=>({ok:status===200,status,body:(async function*(){yield Buffer.from(JSON.stringify(data));})()});
+ await check('E13',async()=>{for(const status of [429,503]){let count=0,delays=[];await a.rejects(()=>emailRequest('mock',{},async()=>{count++;return response(status,{});},async ms=>delays.push(ms)));a.equal(count,3);a.deepEqual(delays,[100,200]);}});
+ await check('E14',async()=>{let count=0;await a.rejects(()=>emailRequest('mock',{},async(u,o)=>{count++;return new Promise((resolve,reject)=>o.signal.addEventListener('abort',()=>reject(Error('abort'))));},async()=>{},2));a.equal(count,3);});
+ await check('E15',()=>{a.equal(EMAIL_SCOPE,'https://www.googleapis.com/auth/gmail.readonly');a(emailSync.toString().includes('format=metadata'));a(!emailSync.toString().includes("method:'POST'"));});
+ const p={state:'state',port:12345,expiresAt:Date.now()+10000},req={method:'GET',url:'/oauth/callback?state=state&code=fixture',socket:{remoteAddress:'127.0.0.1'},headers:{host:'127.0.0.1:12345'}};
+ await check('E16',()=>a.throws(()=>emailCallbackValidate({...req,url:'/oauth/callback?state=bad&code=x'},p)));
+ await check('E17',async()=>{emailPrivateWrite(EMAIL_CONFIG,{clientId:'fixture.apps.googleusercontent.com'});const o=await emailOAuth(),u=new URL(o.url),pending=readJsonFile(EMAIL_PENDING,{});a.equal(u.searchParams.get('code_challenge_method'),'S256');a.equal(u.searchParams.get('code_challenge'),crypto.createHash('sha256').update(pending.verifier).digest('base64url'));a(!JSON.stringify(emailLoad()).includes(pending.verifier));
+ const bad=await fetch(pending.redirectUri+'?state=wrong&code=fixture');a.equal(bad.status,400);a.equal(readJsonFile(EMAIL_PENDING,{}).state,pending.state);
+ emailFetcher=async(url,options)=>{a.equal(url,'https://oauth2.googleapis.com/token');a.equal(options.body.get('code_verifier'),pending.verifier);a.equal(options.body.get('grant_type'),'authorization_code');return response(200,{access_token:secret,refresh_token:secret,scope:EMAIL_SCOPE,expires_in:3600});};
+ try{const good=await fetch(pending.redirectUri+'?state='+pending.state+'&code=fixture');a.equal(good.status,200);a.deepEqual(readJsonFile(EMAIL_PENDING,{}),{});a.equal(readJsonFile(EMAIL_TOKENS,{}).refresh_token,secret);a.equal(emailCallback,null);a(!JSON.stringify(emailLoad()).includes(secret));}finally{emailFetcher=fetch;if(emailCallback){await new Promise(r=>emailCallback.close(r));emailCallback=null;}}
+ });
+ await check('E18',()=>{a.throws(()=>emailCallbackValidate({...req,socket:{remoteAddress:'192.0.2.1'}},p));a.throws(()=>emailCallbackValidate({...req,url:'/wrong?state=state&code=x'},p));a.equal(emailCallbackValidate(req,p),'fixture');});
+ await check('E19',()=>a.equal(emailStorePath(),path.join(remoteConfig.folder,'EmailEvent','state.json')));
+ await check('E20',()=>{a(EMAIL_TOKENS.startsWith(path.join(ROOT,'data')+path.sep));a(!EMAIL_TOKENS.startsWith(remoteConfig.folder));});
+ await check('A9',()=>{const prefix='x'.repeat(220),one=row('',prefix+'ONE'),two=row('',prefix+'TWO');a.equal(one.payload.headers[0].value.slice(0,200),two.payload.headers[0].value.slice(0,200));a.equal(emailMerge(empty(),[one,two]).state.events.length,2);});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+server.address().port;let httpTests=0;
+ try{for(const [route,body,status,headers] of [
+ ['/config',{clientId:'fixture12345.apps.googleusercontent.com'},200,{}],['/config',{clientSecret:secret},400,{}],['/sync',{},409,{}],['/event',{eventId:'../bad',status:'processed'},400,{}],['/sync',{},403,{Origin:'https://example.test'}],['/sync',{},403,{'Sec-Fetch-Site':'cross-site'}],['/sync',{},415,{'Content-Type':'text/plain'}],['/sync',{unknown:1},400,{}]]){
+ const r=await fetch(url+'/api/email'+route,{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8',...headers},body:JSON.stringify(body)});a.equal(r.status,status,route);httpTests++;}
+ for(const route of ['/status','/events']){const r=await fetch(url+'/api/email'+route);a.equal(r.status,200);a(!(await r.text()).includes(secret));httpTests++;}
+ const r=await fetch(url+'/api/email/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:'x'.repeat(140000)})});a.equal(r.status,413);httpTests++;
+ emailPrivateWrite(EMAIL_TOKENS,{access_token:secret,expiresAt:Date.now()+3600000});let gmailCalls=[];
+ emailFetcher=async(u,o)=>{gmailCalls.push([u,o.method||'GET']);a.equal(o.headers.Authorization,'Bearer '+secret);return response(200,u.includes('format=metadata')?row('fresh'): {messages:[{id:'fresh'}]});};
+ let sync=await fetch(url+'/api/email/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});a.equal(sync.status,200);a.equal((await sync.json()).added,1);httpTests++;
+ const e=emailLoad().events.find(x=>x.gmailMessageId==='fresh'),beforeCalls=gmailCalls.length;
+ for(const status of ['reviewed','ignored','processed']){const r=await fetch(url+'/api/email/event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({eventId:e.eventId,status,note:'HTTP local'})});a.equal(r.status,200);httpTests++;}a.equal(gmailCalls.length,beforeCalls);
+ sync=await fetch(url+'/api/email/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});a.equal(sync.status,200);a.equal((await sync.json()).added,0);a.equal(emailLoad().events.find(x=>x.gmailMessageId==='fresh').note,'HTTP local');a(gmailCalls.every(x=>x[1]==='GET'));httpTests++;
+ // Twelve bounded adversarial fixtures, exclusively Email/OAuth/security.
+ const badRecords=[row('bad/../id'),{...row(),internalDate:'NaN'},{...row(),internalDate:'9'.repeat(17)},{...row(),payload:{headers:[{name:'From',value:'x'.repeat(65537)}]}},null];
+ for(const bad of badRecords)a.equal(emailMerge(empty(),[bad,row()]).state.events.length,1);
+ for(const altered of [{...req,headers:{host:'localhost:12345'}},{...req,url:req.url+'&state=state'},{...req,method:'POST'},{...req,url:'/oauth/callback?state=state&code='}])a.throws(()=>emailCallbackValidate(altered,p));
+ for(const body of [{eventId:e.eventId,status:'send'},{eventId:e.eventId,status:'reviewed',token:secret},{eventId:e.eventId,status:'reviewed',note:'x'.repeat(1001)}])a.throws(()=>emailUpdate(body));report.EMAIL_ADVERSARIAL='12/12';
+ a(!JSON.stringify(emailLoad()).includes(secret));
+ }finally{emailFetcher=fetch;await new Promise(r=>server.close(r));}
+ report.HTTP_TESTS=httpTests+'/'+httpTests;report.EMAIL_EVENT_TEST='21/21';console.log(JSON.stringify(report,null,2));
+}
+if(EMAIL_TEST_MODE)emailRegressionChecks().catch(e=>{console.error(e);process.exitCode=1;server.close();if(emailCallback)emailCallback.close();});
