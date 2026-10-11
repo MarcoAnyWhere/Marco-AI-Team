@@ -3,7 +3,20 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.19
+3.3.21
+
+Patch nuova dalla base installata 3.3.19: fallback reviewer Codex read-only safe-v1.
+Sessione CLI headless ephemeral con ignore-user-config, ignore-rules, skip-git-repo-check,
+sandbox read-only e cwd temporanea vuota. Schema e messaggio finale sono file temporanei
+host-side separati dalla cwd, sempre rimossi. La decisione proviene esclusivamente dal
+messaggio finale validato; JSONL opzionale serve solo ad audit e blocca tool o eventi
+malformati. Nessun override -c, retry meno isolato o servizio a consumo. Opzioni obbligatorie
+non supportate causano stop sanitizzato, senza degradazione. Seal verificato prima e dopo
+il fallback anche in caso di errore. processApproval auto:false e UI senza Apply manuale
+restano invariati. Assunzione conservativa: versione proposta 3.3.20, ricostruita dalla
+3.3.19, senza riusare la precedente staging 3.3.20. La review di questa patch usa ancora
+il reviewer installato 3.3.19: possibile needs_review/FALLBACK_UNAVAILABLE_OR_INVALID;
+applicazione manuale a cura del controller dopo verifica dei test.
 
 ## Email/Event Loop V1 (base staging 3.3.15)
 
@@ -46,7 +59,7 @@ backoff 100/200 ms per rete, 429 e 5xx. Nessun polling Gmail automatico.
 
 API locali: GET /api/email/status, GET /api/email/events; POST /api/email/config
 (solo clientId), /oauth/start, /sync (oggetto vuoto), /event (eventId, status,
-nota opzionale). Il callback GET /oauth/callback esiste solo sul listener dedicato.
+nota opzionale). Il callback GET / esiste solo sul listener loopback dedicato.
 POST JSON UTF-8, massimo 128 KiB, schema stretto e policy Origin/cross-site
 esistente. GET stato restituisce solo configurazione non sensibile e contatori.
 
@@ -303,3 +316,12 @@ APPLY_PREPARATION_FAILED. I test usano storage JSON in memoria e non creano
 manifest n? dati personali. Regressioni includono percorso APPROVE/Apply,
 inventory prima/dopo, residui e test falliti, OAuth root/PKCE/state/host,
 errori bounded/malformati e assenza di leak. Nessuna API a consumo.
+
+### OAuth loopback Desktop: correzione staging
+Redirect esatto `http://127.0.0.1:<porta>` (senza slash finale o path), condiviso da authorize e token exchange; il browser invia il callback sulla root `/`. PKCE S256, state, offline, consent e Gmail readonly restano invariati.
+Gli errori del token endpoint espongono solo HTTP status, codice in allowlist (incluso invalid_request) e descrizione locale fissa associata al codice. Per privacy la descrizione remota viene sostituita integralmente, anche se contiene segreti o HTML. Nessun payload remoto nei log.
+Test offline con store in memoria e token endpoint simulato: nessun dato personale o credenziale reale. Apply e pubblicazione richiedono tutti i gate safe-v1; i vincoli di questa sessione vietano scritture fuori staging e pubblicazione remota.
+Riferimento: https://developers.google.com/identity/protocols/oauth2/native-app
+
+Esito controlli staging: OAuth 31/31 (incluso vettore RFC7636), race 3/3, privacy PASS, HTTP Email 16/16, Email/Event 21/21, adversarial Email 12/12; Work V2 e gate pipeline simulati PASS; sintassi server/updater/script cockpit PASS. Review indipendente: PASS.
+Stato consegna: `needs_review`, nessun Apply, backup installato, riavvio o Publish eseguito. Gate operativo bloccato dai vincoli espliciti: solo file applicativi nello staging, nessuna scrittura fuori directory, nessuna modifica remota. Il consenso Google reale resta da verificare nell'ambiente installato.

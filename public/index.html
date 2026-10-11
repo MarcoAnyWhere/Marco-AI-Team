@@ -65,6 +65,7 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
   <div id="devTools" class="row hidden">
     <button class="secondary devTpl" data-tpl="Implementa questa modifica in Marco AI Team mantenendo compatibilità Windows, zero costi variabili e senza toccare dati personali:\n\n">Nuova modifica</button>
     <span class="muted">Apply automatico ? test + review richiesti</span>
+    <span class="muted">reviewer: Antigravity → Codex read-only fallback</span>
     <button class="secondary" id="publishDev">Pubblica su GitHub</button>
     <span class="muted" id="devStatus"></span>
   </div>
@@ -501,7 +502,7 @@ loadHistory().catch(()=>{});
 async function emailApi(route,body){const r=await fetch('/api/email/'+route,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const x=await r.json();if(!r.ok)throw Error(x.error||'Email/Event non disponibile');return x;}
 async function emailRefresh(){
  const s=await emailApi('status');
- $('#emailStatus').textContent='OAuth: '+(s.connected?'connesso':s.configured?'da connettere':'da configurare')+' | Drive: '+(s.driveConfigured?'configurato':'configura Remote')+' | '+Object.entries(s.counts).map(([k,v])=>k+': '+v).join(' · ')+' | Ultimo sync: '+(s.lastSync||'mai')+(s.lastErrorClass?' | '+s.lastErrorClass+' | '+s.lastErrorAt:'');
+ $('#emailStatus').textContent='OAuth: '+(s.connected?'connesso':s.configured?'da connettere':'da configurare')+' | Drive: '+(s.driveConfigured?'configurato':'configura Remote')+' | '+Object.entries(s.counts).map(([k,v])=>k+': '+v).join(' · ')+' | Ultimo sync: '+(s.lastSync||'mai')+(s.lastErrorClass?' | '+s.lastErrorClass+' | '+s.lastErrorAt+(s.httpStatus?' | HTTP '+s.httpStatus:'')+(s.oauthCode?' | '+s.oauthCode:'')+(s.oauthDescription?' | '+s.oauthDescription:''):'');
  $('#emailSync').disabled=!s.connected||!s.driveConfigured||s.busy;
  const table=$('#emailEvents');table.replaceChildren();if(!s.driveConfigured)return;
  const x=await emailApi('events');for(const e of x.events){const tr=document.createElement('tr');
