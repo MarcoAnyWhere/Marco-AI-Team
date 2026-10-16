@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.26 (staging)
+3.3.31 (staging)
 
 OAuth Gmail Desktop: campo password Client secret, mai precompilato o restituito dalle
 API; lo stato espone solo `clientSecretConfigured`. Un campo vuoto conserva il secret
