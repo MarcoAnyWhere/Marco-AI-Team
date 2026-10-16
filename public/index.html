@@ -47,7 +47,7 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
       <option value="smart">Smart · router software</option>
       <option value="panel">Panel · Codex + Gemini + Judge</option>
       <option value="codex">Solo Codex</option>
-      <option value="gemini">Solo Gemini</option>
+      <option value="gemini">Solo Antigravity</option>
       <option value="local">Solo Ollama</option>
     </select>
     <button id="go">Invia</button>
@@ -64,8 +64,8 @@ pre{background:#0c1017;border:1px solid var(--line);border-radius:9px;padding:12
   </div>
   <div id="devTools" class="row hidden">
     <button class="secondary devTpl" data-tpl="Implementa questa modifica in Marco AI Team mantenendo compatibilità Windows, zero costi variabili e senza toccare dati personali:\n\n">Nuova modifica</button>
-    <span class="muted">Apply automatico ? test + review richiesti</span>
-    <span class="muted">reviewer: Antigravity → Codex read-only fallback</span>
+    <span class="muted">Installazione subordinata a test e review</span>
+    <span class="muted">Review indipendente: Antigravity</span>
     <button class="secondary" id="publishDev">Pubblica su GitHub</button>
     <span class="muted" id="devStatus"></span>
   </div>
@@ -207,7 +207,7 @@ async function loadStatus(){
   $("#version").textContent=`v${s.version} · modello locale ${s.ollamaModel}`;
   const items=[
     ["Codex / ChatGPT Plus",s.codex],
-    ["Gemini / Google AI Pro",s.gemini],
+    ["Antigravity / Google AI Pro",s.gemini],
     [`Ollama / ${s.ollamaModel}`,s.ollama]
   ];
   $("#status").innerHTML=items.map(([n,x])=>`<div class="card"><b><span class="dot ${x.ok?"ok":"bad"}"></span>${esc(n)}</b><div class="muted">${esc(x.detail||"")}</div></div>`).join("");
@@ -216,8 +216,9 @@ async function loadStatus(){
 async function loadHistory(){
   const h=await fetch("/api/history").then(r=>r.json());
   $("#hist").innerHTML=h.length
-    ?h.slice(0,8).map(x=>`<div class="item"><b>${esc(x.agent||"general")} / ${esc(x.route)}</b> · ${new Date(x.at).toLocaleString()} · v${esc(x.version||"?")}<br>${esc(x.task.slice(0,180))}</div>`).join("")
+    ?h.slice(0,8).map(x=>`<div class="item"><b>${esc(x.agent||"general")} / ${esc(x.route)}</b> ${esc(runStateText(x.status))} ${esc(recoveryText(x.recoveryState))} · ${new Date(x.at).toLocaleString()} · v${esc(x.version||"?")}<br>${esc((x.task||'').slice(0,180))}${x.runId?`<br><button data-history-run="${esc(x.runId)}">Apri esecuzione</button>`:''}</div>`).join("")
     :"Nessuna.";
+  $('#hist').querySelectorAll('[data-history-run]').forEach(button=>button.onclick=()=>attachMonitor(button.dataset.historyRun));
 }
 
 function markdownReport(x){
@@ -424,6 +425,13 @@ $("#go").onclick=async()=>{
 let monitorSource=null, monitorTimer=null, monitorGeneration=0, monitoredRunId=null;
 const renderedRunIds=new Set();
 let localStartPending=false;
+function runStateText(value){return ({running:'In corso',completed:'Completata',interrupted:'Interrotta dal riavvio',error:'Terminata con errore',cancelled:'Annullata'})[value]||'';}
+function recoveryText(value){return ({INTERRUPTED_NO_REPLAY:'Consultabile; nessun riavvio automatico',RECONCILE_ONLY:'Verifica del risultato in corso',AUTHORITY_UNAVAILABLE:'Stato di rilascio temporaneamente non disponibile',NATIVE_OPERATION_INCOMPLETE:'Operazione interrotta: verifica necessaria'})[value]||'';}
+function releaseStatusText(release){
+ const states={PRECHECK:'Controlli iniziali',READY_FOR_DEV:'Pronto per lo sviluppo',IMPLEMENTING:'Sviluppo in corso',VALIDATING:'Test in corso',READY_FOR_REVIEW:'Test superati; review da eseguire',REVIEWED_APPROVED:'Review approvata; pronto per installazione',APPLYING:'Installazione in corso',RESTART_PENDING:'Riavvio in corso',VERIFYING:'Verifica dopo installazione',RELEASED_HEALTHY:'Rilascio completato e verificato',BLOCKED_HARNESS:'Verifica dei test necessaria',BLOCKED_CONTROL_PLANE:'Verifica del sistema di rilascio necessaria',BLOCKED_PRODUCT:'Correzione del prodotto necessaria',STOP_DIAGNOSIS:'Rilascio fermo: diagnosi necessaria',RELEASE_FROZEN:'Rilascio sospeso per problemi di integrità'};
+ return [states[release.currentState]||'Stato di rilascio da verificare',recoveryText(release.recoveryState),release.firstFailure?'È stato registrato un problema; consultare le evidenze.':''].filter(Boolean).join(' · ');
+}
+
 function durationText(ms){const sec=Math.floor(ms/1000);return Math.floor(sec/60)+' min '+sec%60+' s';}
 function etaText(x){if(x.etaMaxMs==null)return 'non disponibile (storico insufficiente)';const unit=x.etaMaxMs<90000?1000:60000;return '~'+Math.max(0,Math.floor(x.etaMinMs/unit))+'-'+Math.max(1,Math.ceil(x.etaMaxMs/unit))+(unit===1000?' s':' min');}
 function renderRuntimeResult(x){
@@ -444,7 +452,7 @@ function attachMonitor(id){
     $('#activityBox').classList.remove('hidden');
     const icon=x.status==='running'?'●':x.status==='completed'?'✓':x.status==='cancelled'?'⚠':'✕';
     $('#activityInfo').textContent=icon+' '+x.agent+' · '+x.route+' · '+x.phase+' · '+x.status+' · avanzamento stimato '+Math.round(x.progress)+'%';
-    if(x.agent==='dev')$('#devStatus').textContent=x.pipelineStatus||x.phase;
+    if(x.agent==='dev')$('#devStatus').textContent=x.release?releaseStatusText(x.release):x.pipelineStatus||x.phase;
     $('#activityProgress').value=x.progress;
     $('#activityTime').textContent='Tempo trascorso: '+durationText(x.elapsedMs)+' · Tempo residuo stimato: '+etaText(x)+' · Affidabilità: '+({low:'bassa',medium:'media',high:'alta'}[x.etaConfidence]||'bassa');
     $('#activityLast').textContent='Ultima attività: '+(x.events.at(-1)?.message||x.message||'');
@@ -464,7 +472,7 @@ function showFinishedRun(job){
   loadHistory().catch(()=>{});
 }
 async function startBackground(url,body){localStartPending=true;try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,background:true})});const x=await r.json();if(!r.ok)throw new Error(x.error||'Avvio fallito');attachMonitor(x.runId);return x;}finally{localStartPending=false;}}
-function renderRemoteState(x){$('#remoteStatus').textContent='Abilitato: '+(x.enabled?'sì':'no')+' · Watcher: '+x.watcher+' · Ultimo ricevuto: '+(x.lastReceived||'nessuno')+' · Ultimo completato: '+(x.lastCompleted||'nessuno')+((x.activeRunId&&monitoredRunId!==x.activeRunId)?' · Altra attività remota disponibile':'');}
+function renderRemoteState(x){if(x.release)$('#devStatus').textContent=releaseStatusText(x.release);$('#remoteStatus').textContent='Abilitato: '+(x.enabled?'sì':'no')+' · Watcher: '+x.watcher+' · Ultimo ricevuto: '+(x.lastReceived||'nessuno')+' · Ultimo completato: '+(x.lastCompleted||'nessuno')+((x.activeRunId&&monitoredRunId!==x.activeRunId)?' · Altra attività remota disponibile':'');}
 let autostartBusy=false;
 async function loadAutostart(){if(autostartBusy)return;autostartBusy=true;try{const r=await fetch('/api/autostart/status',{cache:'no-store',signal:AbortSignal.timeout(4000)});if(!r.ok)throw new Error();const x=await r.json();$('#autostartStatus').textContent='Avvio automatico Windows: '+(['attivo','non configurato','non rilevabile'].includes(x.status)?x.status:'non rilevabile');}catch{$('#autostartStatus').textContent='Avvio automatico Windows: non rilevabile';}finally{autostartBusy=false;}}
 loadAutostart();

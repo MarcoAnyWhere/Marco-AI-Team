@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.31 (staging)
+3.3.32 (staging)
 
 OAuth Gmail Desktop: campo password Client secret, mai precompilato o restituito dalle
 API; lo stato espone solo `clientSecretConfigured`. Un campo vuoto conserva il secret
@@ -13,20 +13,15 @@ protetta dal writer e dalle ACL esistenti. Nessun secret nei file applicativi o 
 Il secret viene inviato una sola volta nello scambio del codice e nel refresh; senza
 secret OAuth viene bloccato prima dell'apertura del listener loopback.
 
-Review indipendente Antigravity: headless `agy -p <prompt> --model <model>
---effort <effort> --output-format json --json-schema <schema JSON>`.
-Il prompt e un argomento, mai stdin. Il parser accetta solo envelope `status=SUCCESS`
-e `structured_output` oggetto conforme allo schema chiuso: decision
-APPROVE/REJECT/NEEDS_REVIEW, reason, criticalWarnings, testsPassed.
-Stdout/stderr rimangono transitori e non vengono salvati nei report.
-
-Selezione deterministica da changedFiles e diff sanitizzato: README o CSS chiaramente
-cosmetico usa gemini-3.8-flash-medium/medium; modifiche normali usano
-gemini-3.1-pro-high/high. OAuth/auth, segreti, updater/restart, remote approvals,
-publish/git, permessi, shell/processi, rete e filesystem usano Pro/high e review
-sicurezza rafforzata. In caso di dubbio la modifica UI resta rischio normale.
-Nessuna chiamata AI per classificare, nessun modello third-party obbligatorio.
-Codex sviluppa; Antigravity effettua esclusivamente review/test indipendenti.
+Review indipendente nativa Antigravity: `agy models` fornisce il catalogo reale;
+il controller seleziona un modello Google disponibile e invia il prompt tramite
+stdin stream-json, in modalità plan/sandbox. Nessun identificativo di modello è
+imposto dal percorso nativo. Schema chiuso: decision APPROVE/REJECT, confidence,
+safeToApply, blockers. Il reviewer legge completamente lo scope applicativo
+sigillato con view_file paginato; gli strumenti vengono sottoposti ad audit.
+Il percorso storico a diff/hunk e schema NEEDS_REVIEW descritto nelle note delle
+versioni precedenti è legacy. Codex sviluppa; la sola review reale viene eseguita
+dal successivo gate indipendente, mai dal DEV corrente.
 
 Una sola invocazione per review del ciclo/versione, zero retry e zero fallback
 reviewer. Errori producono needs_review e validationStatus=passed quando i test
@@ -402,3 +397,17 @@ Ogni evento/versione/run viene registrato prima dell'invio: dopo un timeout o cr
 Suite consolidata con fixture in memoria: `node server.js --work-v2-test`. Non usa token reali n? scrive dati personali. Apply e pubblicazione restano nel percorso esistente dopo suite e unica review Antigravity; questa modifica di staging non li esegue.
 
 Validazione staging: suite consolidata passed; unica invocazione Antigravity unavailable/invalid (CLI richiede argomento per -p, stdin non supportato dal percorso attuale). Stato needs_review, validationStatus=passed. Nessun retry reviewer, Apply o pubblicazione eseguiti. Il contratto CLI Antigravity richiede verifica in un ciclo successivo.
+
+## P2 — percorso nativo corrente
+
+Un solo DEV crea il candidato; la versione patch è assegnata dal percorso nativo. La review effettiva è `nativeReleaseHost.review`: catalogo `agy models`, input stream-json e modello disponibile selezionato dal catalogo. Il reviewer legge completamente i file nello scope sigillato tramite view_file paginato; audit dei tool e modalità sola lettura. Il vecchio percorso a diff/hunk descritto sopra è legacy, non l'autorità Release Controller v2. Nessuna review reale viene eseguita durante DEV.
+
+La cronologia unisce righe sincrone e documenti runtime per runId; i background interrotti sono proiettati come interrupted / INTERRUPTED_NO_REPLAY senza riesecuzione o scritture diagnostiche. Lo stato release viene letto dal documento nativo con candidate, validationAttempts, reviewReceipt e applyReceipt. Due integrity blockers congelano il tentativo; solo difetti prodotto dimostrati consentono la richiesta di replacement, senza riutilizzare candidati congelati.
+
+Verify attende fino a 90 secondi, con richieste locali limitate; un timeout lascia la stessa ricevuta PENDING e richiede riconciliazione esplicita. Nessun replay installazione o restart. La conferma pubblicazione verifica manifest versione/hash e blob nel riferimento Git remoto; viene persistita separatamente dall'osservazione CDN. Cache raw obsoleta significa CDN_PENDING, senza autorizzare candidate, Apply o ripubblicazione. Nessuna nuova dipendenza o API a consumo.
+
+Limiti: prove simulate non sostituiscono avvio lento reale Windows, review indipendente e gate installazione. Nessuna Apply, pubblicazione o review reale eseguita nel DEV P2.
+
+Prove P2: `node server.js --p2-test` verifica i contratti con storage isolato in memoria; non sostituisce `--release-controller-test`, che prova anche il commit nativo Windows. Nel DEV il gate disco è bloccato da `spawnSync powershell.exe EPERM` al T01: limite harness/ambiente, non prova di difetto prodotto né autorizzazione a replacement candidate. Le suite lineage (11), safety (13) e Work V2 sono state eseguite.
+
+La cronologia conserva i limiti esistenti: fino a 100 documenti run, ultime 30 voci esposte e 8 mostrate nel pannello. Il recupero non riprende automaticamente processi interrotti. Cinque contratti P2 passati; versione assegnata dal percorso nativo senza modifica manuale nel DEV.
