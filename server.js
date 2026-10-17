@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.34";
+const VERSION = "3.3.35";
 const EMAIL_TEST_MODE = process.argv.includes('--email-event-test');
 const SEAL_MODE = process.argv.includes("--seal-dev-stage");
 const LINEAGE_TEST_MODE = process.argv.includes('--p1-lineage-test');
@@ -15,7 +15,8 @@ const RELEASE_CONTROLLER_TEST_MODE = process.argv.includes('--release-controller
 const RELEASE_NATIVE_MODE = process.argv.includes('--release-controller-native');
 const P2_TEST_MODE=process.argv.includes('--p2-test');
 const CONVERSATION_TEST_MODE=process.argv.includes('--conversation-test');
-const WORK_TEST_MODE = CONVERSATION_TEST_MODE || P2_TEST_MODE || require.main!==module || RELEASE_NATIVE_MODE || RELEASE_CONTROLLER_TEST_MODE || MAINTENANCE_TEST_MODE || LINEAGE_TEST_MODE || SAFETY_TEST_MODE || SEAL_MODE || EMAIL_TEST_MODE || process.argv.includes("--work-v2-test");
+const GEMINI_QUOTA_MODE=process.argv.includes('--gemini-quota-statusline')||process.argv.includes('--gemini-quota-refresh');
+const WORK_TEST_MODE = GEMINI_QUOTA_MODE || CONVERSATION_TEST_MODE || P2_TEST_MODE || require.main!==module || RELEASE_NATIVE_MODE || RELEASE_CONTROLLER_TEST_MODE || MAINTENANCE_TEST_MODE || LINEAGE_TEST_MODE || SAFETY_TEST_MODE || SEAL_MODE || EMAIL_TEST_MODE || process.argv.includes("--work-v2-test");
 const testJsonStore = new Map();
 const RESTART_INSTANCE = process.env.MARCO_RESTART_INSTANCE || crypto.randomUUID();
 let autoPublishToken = process.env.MARCO_AUTO_PUBLISH_TOKEN || '';
@@ -702,7 +703,7 @@ function releaseHarness(root) {
   const source=fs.readFileSync(__filename,'utf8');
   const manifests=['--conversation-test','--p2-test','--release-controller-test','--p1-lineage-test','--p1-safety-test','--work-v2-test'];
   const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
-  return {harnessHash:hash(source),testSuiteVersion:'release-controller-v2/quota-ui+single-clock+checkpoint/6',fixtureManifestHash:hash(bytes),manifestHash:hash(JSON.stringify(manifests)),manifests};
+  return {harnessHash:hash(source),testSuiteVersion:'release-controller-v2/gemini-quota-v1/7',fixtureManifestHash:hash(bytes),manifestHash:hash(JSON.stringify(manifests)),manifests};
 }
 // Streaming avoids Windows argv limits without truncating review evidence.
 function nativeGeminiReviewModel(catalog) {
@@ -3122,6 +3123,79 @@ async function emailRoute(req,res){
  }catch(e){if(e.errorClass)emailDiagnose(e.errorClass);return sendJson(res,e.status||500,{error:e.errorClass==='CLIENT_SECRET_REQUIRED'?'Configura il Client secret OAuth Desktop':e.errorClass||'CALLBACK_INVALID'});}
 }
 
+// Gemini quota: explicit local refresh, no model requests, no hidden polling of user settings.
+const GEMINI_BUCKETS={'gemini-5h':{label:'Gemini Pro / Flash · 5 ore',durationMins:300},'gemini-weekly':{label:'Gemini Pro / Flash · settimana',durationMins:10080},'gemini-argon-wtu-weekly':{label:'Gemini 4 Argon · settimana',durationMins:10080}};
+let geminiRefreshPending=null;
+const geminiData=name=>hostUnlinked(path.join(ROOT,'data','gemini-quota-'+name+'.json'));
+function geminiWrite(file,value){hostUnlinked(file);fs.mkdirSync(path.dirname(file),{recursive:true});const temp=file+'.'+crypto.randomUUID()+'.tmp';try{const fd=fs.openSync(temp,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(temp,file);}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}}
+function geminiRead(file){hostUnlinked(file);if(!fs.existsSync(file))return null;if(fs.statSync(file).size>524288)throw Error('GEMINI_STORAGE_INVALID');return JSON.parse(fs.readFileSync(file,'utf8'));}
+function geminiQuotaProjection(snapshot,now=Date.now()){
+  const empty={status:'unavailable',windows:[],routingEligible:false,reason:'Premi Aggiorna Gemini per leggere le quote ufficiali.'};
+  if(!snapshot||snapshot.schema!==1||!Array.isArray(snapshot.quotas))return empty;
+  if(typeof snapshot.confirmedAt!=='string'||!Number.isFinite(Date.parse(snapshot.confirmedAt)))return empty;
+  const observedAt=new Date(snapshot.confirmedAt).toISOString(),modelId=typeof snapshot.modelId==='string'&&/^gemini-[a-z0-9.-]+-high$/.test(snapshot.modelId)?snapshot.modelId:null;
+  const age=now-Date.parse(observedAt);if(!Number.isFinite(age)||age<0||age>300000)return {...empty,status:'stale',observedAt,reason:'Rilevazione Gemini scaduta: aggiorna prima di usare le percentuali.'};
+  const windows=snapshot.quotas.flatMap(q=>{const definition=GEMINI_BUCKETS[q.id],reset=Date.parse(q.resetsAt);return definition&&Number.isFinite(q.remainingPercent)&&q.remainingPercent>=0&&q.remainingPercent<=100&&Number.isFinite(reset)&&reset>now?[{...definition,bucket:q.id,remainingPercent:q.remainingPercent,resetsAt:reset/1000}]:[];});
+  if(!windows.length)return empty;
+  const bucket=/argon/i.test(modelId||'')?'gemini-argon-wtu-weekly':/^gemini-.*(?:pro|flash)/i.test(modelId||'')?'gemini-weekly':null;
+  const routingWindows=bucket?windows.filter(w=>w.bucket===bucket||bucket==='gemini-weekly'&&w.bucket==='gemini-5h'):[];
+  return {status:'available',windows,routingWindows,routingEligible:!!routingWindows.length,blocked:routingWindows.some(w=>w.remainingPercent===0),observedAt:snapshot.confirmedAt,modelId,reason:'Quote lette dal pannello ufficiale Antigravity; aggiornamento esplicito, validità cinque minuti.'};
+}
+function geminiCurrentQuota(){try{return geminiQuotaProjection(geminiRead(geminiData('snapshot')));}catch{return {status:'unavailable',windows:[],routingEligible:false,reason:'Rilevazione Gemini non leggibile; originale conservato.'};}}
+function geminiSettingsWrite(file,text){hostUnlinked(file);const temp=file+'.marco-'+crypto.randomUUID()+'.tmp';try{const fd=fs.openSync(temp,'wx',0o600);try{fs.writeFileSync(fd,text);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(temp,file);}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}}
+function geminiRestoreValue(current,transaction){
+  const original=JSON.parse(transaction.before),expected={...original,statusLine:transaction.hook,trustedWorkspaces:[...new Set([...original.trustedWorkspaces,transaction.directory])]};
+  if(JSON.stringify(current)===JSON.stringify(original))return transaction.before;
+  const hookSignature=value=>JSON.stringify(Object.keys(value||{}).sort().map(key=>[key,value[key]]));
+  if(hookSignature(current.statusLine)!==hookSignature(transaction.hook))throw Error('GEMINI_CONFIG_CONFLICT');
+  const result={...current};delete result.statusLine;
+  if(!original.trustedWorkspaces.includes(transaction.directory))result.trustedWorkspaces=result.trustedWorkspaces.filter(x=>x!==transaction.directory);
+  const stable=value=>JSON.stringify(Object.keys(value).sort().map(k=>[k,value[k]]));
+  return stable(result)===stable(original)?transaction.before:JSON.stringify(result,null,2);
+}
+function geminiRestore(transaction){
+  const settings=hostUnlinked(path.join(os.homedir(),'.gemini','antigravity-cli','settings.json'));
+  if(!transaction||transaction.schema!==1||typeof transaction.before!=='string'||crypto.createHash('sha256').update(transaction.before).digest('hex')!==transaction.beforeHash||!Array.isArray(JSON.parse(transaction.before).trustedWorkspaces)||JSON.parse(transaction.before).statusLine)throw Error('GEMINI_TRANSACTION_INVALID');
+  const current=geminiRead(settings),restored=geminiRestoreValue(current,transaction);if(fs.readFileSync(settings,'utf8')!==restored)geminiSettingsWrite(settings,restored);transaction.restored=true;transaction.restoredAt=new Date().toISOString();geminiWrite(geminiData('transaction'),transaction);
+}
+function geminiRecover(){const transaction=geminiRead(geminiData('transaction'));if(!transaction||transaction.restored)return;try{process.kill(transaction.pid,0);throw Error('GEMINI_REFRESH_BUSY');}catch(error){if(error.code!=='ESRCH')throw error;}geminiRestore(transaction);}
+function geminiStatuslineCollect(){return new Promise(resolve=>{let input='',size=0;process.stdin.on('data',chunk=>{size+=chunk.length;if(size>262144){process.exitCode=1;process.stdin.destroy();return;}input+=chunk;});process.stdin.on('end',()=>{try{const data=JSON.parse(input),quotas=[];for(const [id,value] of Object.entries(data.quota||{})){if(!GEMINI_BUCKETS[id]||!Number.isFinite(value?.remaining_fraction)||value.remaining_fraction<0||value.remaining_fraction>1||!Number.isFinite(Date.parse(value.reset_time)))continue;quotas.push({id,remainingPercent:Math.round(value.remaining_fraction*10000)/100,resetsAt:new Date(value.reset_time).toISOString()});}geminiWrite(geminiData('sample'),{schema:1,observedAt:new Date().toISOString(),quotas});process.stdout.write('Quota Gemini locale');resolve();}catch{process.exitCode=1;resolve();}});});}
+async function geminiQuotaWorkerUnlocked(){
+  if(process.platform!=='win32')throw Error('GEMINI_WINDOWS_REQUIRED');geminiRecover();
+  const config=geminiRead(geminiData('config'));if(config?.enabled!==true||typeof config.directory!=='string'||!path.isAbsolute(config.directory)||path.basename(config.directory)!=='gemini-quota-probe')throw Error('GEMINI_NOT_CONFIGURED');const directory=hostUnlinked(config.directory);if(!fs.statSync(directory).isDirectory())throw Error('GEMINI_NOT_CONFIGURED');
+  const list=await run(path.join(process.env.SystemRoot,'System32','tasklist.exe'),['/FI','IMAGENAME eq agy.exe','/FO','CSV','/NH'],{timeout:10000,captureLimit:524288});if(/"agy\.exe"/i.test(list.out))throw Error('GEMINI_CLI_BUSY');
+  const winpty=path.join(process.env.ProgramFiles||'C:\\Program Files','Git','usr','bin','winpty.exe');if(!fs.existsSync(winpty))throw Error('GEMINI_PTY_MISSING');
+  const node=await run('node',['-p','process.execPath'],{timeout:10000});if(node.out.toLowerCase()!==process.execPath.toLowerCase())throw Error('GEMINI_NODE_MISMATCH');
+  const catalog=await run(agyExe(),['models'],{timeout:30000}),modelId=nativeGeminiReviewModel(catalog.out);
+  const serverPath=__filename.replaceAll('\\','/');if(!/^[A-Za-z]:\/[A-Za-z0-9_./:-]+$/.test(serverPath))throw Error('GEMINI_PATH_UNSUPPORTED');
+  const settings=hostUnlinked(path.join(os.homedir(),'.gemini','antigravity-cli','settings.json')),before=fs.readFileSync(settings,'utf8'),value=JSON.parse(before);if(value.statusLine||!Array.isArray(value.trustedWorkspaces)||value.trustedWorkspaces.some(x=>typeof x!=='string'))throw Error('GEMINI_CUSTOM_CONFIG');
+  const transaction={schema:1,pid:process.pid,before,beforeHash:crypto.createHash('sha256').update(before).digest('hex'),directory,hook:{type:'command',command:'node '+serverPath+' --gemini-quota-statusline',enabled:true,stack_with_default:true},restored:false,startedAt:new Date().toISOString()};
+  geminiWrite(geminiData('transaction'),transaction);
+  let child,buffer='',sample=null,commandAt=null;const timers=[];
+  try{
+    if(fs.readFileSync(settings,'utf8')!==before)throw Error('GEMINI_CONFIG_CONFLICT');
+    geminiSettingsWrite(settings,JSON.stringify({...value,statusLine:transaction.hook,trustedWorkspaces:[...new Set([...value.trustedWorkspaces,directory])]},null,2));
+    sample=await new Promise((resolve,reject)=>{
+      child=spawn(winpty,['-Xallow-non-tty',agyExe(),'--sandbox','--mode','plan'],{cwd:directory,windowsHide:true,stdio:['pipe','pipe','pipe']});
+      child.on('error',()=>reject(Error('GEMINI_START_FAILED')));child.on('close',()=>reject(Error('GEMINI_EARLY_EXIT')));child.stdin.on('error',()=>{});child.stderr.resume();child.stdout.on('data',chunk=>{buffer=(buffer+chunk).slice(-20000);if(/Do you trust|Statusline [Ee]rror/.test(buffer))reject(Error('GEMINI_PROTOCOL_FAILED'));});
+      timers.push(setTimeout(()=>{commandAt=new Date().toISOString();child.stdin.write('/usage\r');},3000));
+      timers.push(setTimeout(()=>{try{const current=geminiRead(geminiData('sample'));if(!/Models & Quota/.test(buffer)||!current?.quotas?.length||Date.parse(current.observedAt)<=Date.parse(commandAt))throw Error('GEMINI_NO_FRESH_DATA');resolve(current);}catch(error){reject(error);}},14000));
+      timers.push(setTimeout(()=>reject(Error('GEMINI_TIMEOUT')),20000));
+    });
+  }finally{
+    timers.forEach(clearTimeout);if(child?.pid){await new Promise(resolve=>{const kill=spawn(path.join(process.env.SystemRoot,'System32','taskkill.exe'),['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});kill.on('close',resolve);kill.on('error',resolve);setTimeout(resolve,5000).unref();});}
+    geminiRestore(transaction);
+  }
+  const snapshot={schema:1,confirmedAt:new Date().toISOString(),sourceObservedAt:sample.observedAt,modelId,quotas:sample.quotas};geminiWrite(geminiData('snapshot'),snapshot);return geminiQuotaProjection(snapshot);
+}
+async function geminiQuotaWorker(){
+  const lock=geminiData('lock');fs.mkdirSync(path.dirname(lock),{recursive:true});
+  if(fs.existsSync(lock)){const owner=geminiRead(lock);if(!Number.isSafeInteger(owner?.pid)||owner.pid<=0)throw Error('GEMINI_LOCK_INVALID');try{process.kill(owner.pid,0);throw Error('GEMINI_REFRESH_BUSY');}catch(error){if(error.code!=='ESRCH')throw error;}geminiRecover();fs.unlinkSync(lock);}
+  const fd=fs.openSync(lock,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify({pid:process.pid}));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+  try{return await geminiQuotaWorkerUnlocked();}finally{if(geminiRead(lock)?.pid===process.pid)fs.unlinkSync(lock);}
+}
+async function refreshGeminiQuota(){if(geminiRefreshPending)return geminiRefreshPending;geminiRefreshPending=(async()=>{try{const result=await run(process.execPath,[__filename,'--gemini-quota-refresh'],{timeout:90000,captureLimit:32768});return JSON.parse(result.out);}catch(error){const match=String(error.stderr||error.message).match(/GEMINI_[A-Z_]+/);const code=match?.[0]||'GEMINI_REFRESH_FAILED';const messages={GEMINI_REFRESH_BUSY:'Una lettura Gemini è già in corso.',GEMINI_CLI_BUSY:'Antigravity è già in uso: riprova al termine.',GEMINI_CUSTOM_CONFIG:'Esiste una barra di stato personalizzata: non è stata modificata.',GEMINI_NOT_CONFIGURED:'La lettura Gemini deve essere configurata localmente.',GEMINI_PTY_MISSING:'Il terminale virtuale di Git non è disponibile.',GEMINI_CONFIG_CONFLICT:'Configurazione modificata durante la lettura: verifica necessaria.'};throw httpError(409,messages[code]||'Lettura Gemini non riuscita; nessuna percentuale stimata.');}})().finally(()=>{geminiRefreshPending=null;});return geminiRefreshPending;}
+
 // Conversation V1: local explicit context, durable turns, and subscription routing.
 const CONVERSATION_TOPICS=['general','work','teaching','documents','development'];
 const conversationControllers=new Map();
@@ -3151,9 +3225,9 @@ function readCodexQuota() {
   });
 }
 async function conversationQuotas() {
-  if(conversationQuotaCache&&Date.now()-conversationQuotaCache.at<60000)return conversationQuotaCache.value;
+  if(conversationQuotaCache&&Date.now()-conversationQuotaCache.at<60000)return {...conversationQuotaCache.value,gemini:geminiCurrentQuota()};
   if(conversationQuotaPending)return conversationQuotaPending;
-  conversationQuotaPending=(async()=>{const codex=await readCodexQuota(),value={codex,gemini:{status:'unavailable',windows:[],reason:'La CLI espone /usage nel proprio pannello; una lettura automatica verificata non è disponibile.'},updatedAt:new Date().toISOString()};conversationQuotaCache={at:Date.now(),value};return value;})().finally(()=>{conversationQuotaPending=null;});return conversationQuotaPending;
+  conversationQuotaPending=(async()=>{const codex=await readCodexQuota(),value={codex,gemini:geminiCurrentQuota(),updatedAt:new Date().toISOString()};conversationQuotaCache={at:Date.now(),value};return value;})().finally(()=>{conversationQuotaPending=null;});return conversationQuotaPending;
 }
 function conversationDiskIO() {
   const folder=()=>hostUnlinked(path.join(ROOT,'data','conversations'));
@@ -3207,7 +3281,7 @@ function conversationEngine(mode,quotas) {
   if(mode==='local')return {engine:'local',reason:'Motore locale scelto esplicitamente.'};
   if(mode==='codex'||mode==='gemini')return {engine:mode,reason:'Motore scelto esplicitamente.'};
   const c=quotas.codex,g=quotas.gemini;if(c?.blocked)return {engine:'gemini',reason:'Codex ha raggiunto il limite: proseguo con Gemini e lo stesso contesto.'};
-  if(c?.status==='available'&&g?.status==='available'&&!g.blocked){const margin=q=>Math.min(...q.windows.map(w=>w.remainingPercent));if(margin(g)>margin(c)+15)return {engine:'gemini',reason:'Entrambi disponibili; Gemini ha maggiore margine nelle proprie finestre.'};}
+  if(c?.status==='available'&&g?.status==='available'&&g.routingEligible!==false&&!g.blocked){const margin=q=>Math.min(...(q.routingWindows||q.windows).map(w=>w.remainingPercent));if(margin(g)>margin(c)+15)return {engine:'gemini',reason:'Entrambi disponibili; Gemini ha maggiore margine nelle proprie finestre.'};}
   return {engine:'codex',reason:'Codex disponibile; qualità della conversazione prioritaria. La quota Gemini non viene stimata.'};
 }
 function conversationCodexOverrides(config) {
@@ -3292,6 +3366,7 @@ async function conversationRoute(req,res) {
   if(req.method!=='POST')throw httpError(404,'Percorso conversazione non trovato.');
   const body=await readJsonBody(req);
   const keys=allowed=>{if(Object.keys(body).some(k=>!allowed.includes(k)))throw httpError(400,'Campo non supportato.');};
+  if(route==='gemini-quota'){keys([]);return sendJson(res,200,await refreshGeminiQuota());}
   if(route==='threads'){keys([]);return sendJson(res,201,conversations.create());}
   if(route==='context'){keys(['text']);return sendJson(res,200,conversationContext(body.text));}
   if(route==='cancel'){
@@ -3617,7 +3692,7 @@ async function jobsRegressionChecks(){
  const fallback=await performLiveSearch({}, {...deps,codex:async()=>{throw Error('quota unavailable');}});assert.equal(fallback.jobs[0].fitKind,'pre-score');assert.equal(fallback.jobs[0].state,'applied');
  assert.equal(dedupeLiveJobs([j,{...j,url:j.url+'?utm_source=x'}]).jobs.length,1);assert(preScoreJob(j,liveCriteria(profile)).fit>preScoreJob({...j,title:'Junior Data Manager'},liveCriteria(profile)).fit);return 'PASS';
 }
-if(require.main===module&&WORK_TEST_MODE&&!CONVERSATION_TEST_MODE&&!RELEASE_NATIVE_MODE&&!RELEASE_CONTROLLER_TEST_MODE&&!MAINTENANCE_TEST_MODE&&!LINEAGE_TEST_MODE&&!SAFETY_TEST_MODE&&!EMAIL_TEST_MODE&&!SEAL_MODE)(async()=>{await runControlPlaneTargetedChecks();await agyReviewRegressionChecks();await workV2RegressionChecks();await emailRegressionChecks();await emailReportingRegressionChecks();})().catch(e=>{console.error(e);process.exitCode=1;server.close();});
+if(require.main===module&&WORK_TEST_MODE&&!GEMINI_QUOTA_MODE&&!CONVERSATION_TEST_MODE&&!RELEASE_NATIVE_MODE&&!RELEASE_CONTROLLER_TEST_MODE&&!MAINTENANCE_TEST_MODE&&!LINEAGE_TEST_MODE&&!SAFETY_TEST_MODE&&!EMAIL_TEST_MODE&&!SEAL_MODE)(async()=>{await runControlPlaneTargetedChecks();await agyReviewRegressionChecks();await workV2RegressionChecks();await emailRegressionChecks();await emailReportingRegressionChecks();})().catch(e=>{console.error(e);process.exitCode=1;server.close();});
 async function emailRegressionChecks(){
  const a=require('node:assert/strict'),report={};remoteConfig.folder=path.join(ROOT,'mock-drive');
  const row=(id='abc',mid='<fixture>')=>({...(id?{id}:{}),threadId:'thread',internalDate:'1700000000000',payload:{headers:[{name:'Message-ID',value:mid},{name:'From',value:'fixture@example.test'},{name:'Subject',value:'<script>alert(1)</script>'}]}});
@@ -4086,6 +4161,9 @@ async function conversationRegressionChecks(){
 const assert=require('node:assert/strict'),m=module.exports;checks.length=0;
  await test('Checkpoint metadata accepted but tools and extra payload rejected',()=>{const result={event:'result',result:{status:'SUCCESS',num_turns:1,structured_output:{answer:'ok'}}},meta={event:'step_update',step_update:{conversation_id:'37420f05-5545-4d8b-a91f-87d44023533e',step_index:1,state:'DONE',step_type:'checkpoint',duration_seconds:1}},parse=entry=>parseNativeReviewStream(JSON.stringify(entry)+'\n'+JSON.stringify(result),[]);assert.equal(parse(meta).answer,'ok');for(const extra of [{tool_name:'shell'},{payload:{}},{state:'RUNNING'}])assert.throws(()=>parse({...meta,step_update:{...meta.step_update,...extra}}));assert.throws(()=>parse({event:'step_update',step_update:{step_type:'tool',tool_name:'shell'}}));});
  await test('OAuth test fixture captures one timestamp',()=>{const source=fs.readFileSync(__filename,'utf8');assert(!source.includes('createdAt:Date.now(),'+'expiresAt:Date.now()+180000'));assert(source.includes('createdAt:fixtureCreatedAt,expiresAt:fixtureCreatedAt+180000'));});
+ await test('Gemini quota separates Argon from Pro and expires',()=>{const now=Date.now(),snapshot={schema:1,confirmedAt:new Date(now).toISOString(),modelId:'gemini-4-argon-high',quotas:[{id:'gemini-weekly',remainingPercent:100,resetsAt:new Date(now+3600000).toISOString()},{id:'gemini-argon-wtu-weekly',remainingPercent:84.39,resetsAt:new Date(now+3600000).toISOString()},{id:'3p-weekly',remainingPercent:0,resetsAt:new Date(now+3600000).toISOString()}]};const quota=geminiQuotaProjection(snapshot,now);assert.equal(quota.windows.length,2);assert.equal(quota.routingWindows.length,1);assert.equal(quota.routingWindows[0].remainingPercent,84.39);assert.equal(geminiQuotaProjection(snapshot,now+300001).status,'stale');assert.equal(geminiQuotaProjection({...snapshot,confirmedAt:new Date(now+1000).toISOString()},now).status,'stale');assert.equal(geminiQuotaProjection({...snapshot,modelId:'gemini-new-high'},now).routingEligible,false);});
+ await test('Gemini restoration preserves concurrent user changes',()=>{const original={trustedWorkspaces:['original'],theme:'dark'},hook={type:'command',command:'owned'},transaction={before:JSON.stringify(original),directory:'probe',hook};const current={...original,trustedWorkspaces:['original','probe','user-added'],statusLine:hook,theme:'light'};const restored=JSON.parse(geminiRestoreValue(current,transaction));assert.equal(restored.theme,'light');assert.deepEqual(restored.trustedWorkspaces,['original','user-added']);assert(!restored.statusLine);assert.throws(()=>geminiRestoreValue({...current,statusLine:{command:'foreign'}},transaction));assert.equal(geminiRestoreValue(original,transaction),transaction.before);assert.equal(geminiRestoreValue({...original,statusLine:{command:'owned',type:'command'}},transaction),transaction.before);});
+ await test('Gemini collector never invents invalid quota or reuses expired reset',()=>{const now=Date.now(),snapshot={schema:1,confirmedAt:new Date(now).toISOString(),modelId:'gemini-4-argon-high',quotas:[{id:'gemini-argon-wtu-weekly',remainingPercent:101,resetsAt:new Date(now+3600000).toISOString()},{id:'gemini-5h',remainingPercent:50,resetsAt:new Date(now-1).toISOString()}]};assert.equal(geminiQuotaProjection(snapshot,now).status,'unavailable');assert.equal(geminiQuotaProjection(null,now).status,'unavailable');});
  await test('Persistent turns are idempotent and conflicting retries fail closed',()=>{const {repo}=fixture(),doc=repo.create(),request={id:crypto.randomUUID(),text:'Preferisco risposte brevi',topic:'auto',mode:'smart'};assert(!repo.reserve(doc.id,request).duplicate);assert(repo.reserve(doc.id,request).duplicate);assert.equal(repo.get(doc.id).turns.length,1);assert.throws(()=>repo.reserve(doc.id,{...request,text:'altro'}),{status:409});assert.throws(()=>repo.reserve(doc.id,{...request,id:crypto.randomUUID()}),{status:409});});
  await test('Invalid stored documents preserved',()=>{const {repo,values}=fixture(),doc=repo.create();values.set(doc.id,{schema:999,id:doc.id});assert.throws(()=>repo.get(doc.id),{status:409});assert.equal(values.get(doc.id).schema,999);assert.throws(()=>repo.get('../outside'),{status:400});});
  await test('Cancelled answer cannot overwrite cancellation',()=>{const {repo}=fixture(),doc=repo.create(),id=crypto.randomUUID();repo.reserve(doc.id,{id,text:'Ciao',topic:'auto',mode:'smart'});repo.update(doc.id,id,{status:'cancelled'});repo.update(doc.id,id,{status:'completed',answer:'late'});assert.equal(repo.get(doc.id).turns[0].status,'cancelled');assert.equal(repo.get(doc.id).turns[0].answer,null);});
@@ -4101,3 +4179,8 @@ console.log(JSON.stringify({conversationContracts:checks}));if(checks.some(c=>!c
 }
 
 if(CONVERSATION_TEST_MODE)conversationRegressionChecks().then(()=>process.exit(0)).catch(error=>{console.error(error);process.exit(1);});
+
+Object.assign(module.exports,{geminiQuotaProjection,geminiRestoreValue});
+if(process.argv.includes('--gemini-quota-statusline'))geminiStatuslineCollect().then(()=>process.exit(process.exitCode||0));
+if(process.argv.includes('--gemini-quota-refresh'))geminiQuotaWorker().then(value=>{console.log(JSON.stringify(value));process.exit(0);}).catch(error=>{console.error(/^GEMINI_[A-Z_]+$/.test(error.message)?error.message:'GEMINI_REFRESH_FAILED');process.exit(1);});
+if(!WORK_TEST_MODE){try{geminiRecover();}catch{console.warn('Lettura quote Gemini: recupero locale da verificare.');}}

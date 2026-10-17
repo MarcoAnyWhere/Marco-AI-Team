@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.34 (staging)
+3.3.35 (staging)
 
 OAuth Gmail Desktop: campo password Client secret, mai precompilato o restituito dalle
 API; lo stato espone solo `clientSecretConfigured`. Un campo vuoto conserva il secret
@@ -426,3 +426,7 @@ Stabilità: identificativi di invio idempotenti, nessuna ripetizione automatica 
 
 ## 3.3.34 — Quote in evidenza e stabilità
 Quote disponibili in alto prima della chat, con riquadri Codex e Gemini, finestre distinte, percentuale restante, ripristino e ultima rilevazione. Aggiornamento automatico ogni minuto e al ritorno sulla pagina; indisponibilità esplicita, nessuna quota Gemini inventata. Selettori contenuti su schermi stretti. Fixture OAuth con singolo timestamp e parser nativo dei checkpoint con schema chiuso; strumenti e payload estranei restano rifiutati.
+
+## 3.3.35 — Lettura ufficiale quote Gemini
+Aggiorna Gemini usa /usage della CLI con un terminale virtuale Git già installato, senza chiamare modelli. Aggiornamento esplicito, durata circa 20 secondi; dati validi cinque minuti, poi indicati come scaduti e non usati dal router. Distinzione fra Gemini Pro/Flash e Gemini 4 Argon. La configurazione locale data/gemini-quota-config.json deve abilitare la sola cartella di prova autorizzata. Nessuna configurazione viene distribuita con credenziali o percorsi personali.
+La barra di stato esistente non viene sostituita; lettura rifiutata se Antigravity è già in uso. Hook e fiducia temporanea sono registrati e rimossi a fine lettura, preservando modifiche concorrenti estranee. Recupero del journal al riavvio, se il processo titolare non esiste. Il collector conserva solo bucket riconosciuti, percentuale e reset; scarta email, percorsi e cronologia. I campi quota restano separati dal payload privato della CLI. Nessuna installazione automatica di dipendenze, API a consumo o polling che modifichi periodicamente la configurazione.
