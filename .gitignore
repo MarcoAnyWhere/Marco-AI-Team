@@ -1,4 +1,5 @@
 data/
+node_modules/
 .backups/
 .dev-work/
 .update/

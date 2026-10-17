@@ -5,37 +5,54 @@ const crypto = require('crypto');
 const net = require('net');
 
 // The host retains verified parent bytes and write-once child bindings outside stages.
-function nativeLineageStore(io, files) {
+function nativeLineageStore(io, files, historicalFiles=files) {
   const digest = value => crypto.createHash('sha256').update(value).digest('hex');
   const invalid = message => { throw Object.assign(new Error(message), {failureCause:'LINEAGE_INVALID'}); };
   const immutable = value => { if(value && typeof value === 'object'){ for(const item of Object.values(value)) immutable(item); Object.freeze(value); } return value; };
   const snapshot = reader => files.map(file => ({path:file, bytes:reader(file).toString('base64')}));
   const contentSeal = entries => entries.map(entry => entry.path + ':' + digest(Buffer.from(entry.bytes,'base64'))).join('|');
-  const parentId = parent => 'root:' + digest(JSON.stringify({version:parent.version,files:parent.files}));
+  const expanded=JSON.stringify(files)!==JSON.stringify(historicalFiles);
+  const inventoryId=digest(JSON.stringify(files));
+  const parentId = parent => 'root:' + digest(JSON.stringify(parent.schema===2?
+    {schema:2,version:parent.version,files:parent.files,inventoryId:parent.inventoryId,maintenanceRecordSha256:parent.maintenanceRecordSha256}:
+    {version:parent.version,files:parent.files}));
   const versionOf = entries => Buffer.from(entries.find(entry=>entry.path==='server.js').bytes,'base64').toString('utf8').match(/const VERSION = "([^"]+)";/)?.[1];
   const verify = parent => {
-    if(parent?.schema !== 1 || !Array.isArray(parent.files) || parent.files.length !== files.length) invalid('Missing parent snapshot');
-    for(let n=0;n<files.length;n++){
+    const expected=parent?.schema===1?historicalFiles:files;
+    if(![1,2].includes(parent?.schema) || !Array.isArray(parent.files) || parent.files.length!==expected.length) invalid('Missing parent snapshot');
+    if(parent.schema===2 && (!expanded || parent.inventoryId!==inventoryId || !(parent.maintenanceRecordSha256===null || /^[a-f0-9]{64}$/.test(parent.maintenanceRecordSha256)))) invalid('Invalid maintained parent identity');
+    for(let n=0;n<expected.length;n++){
       const entry=parent.files[n];
-      if(entry?.path!==files[n] || typeof entry.bytes!=='string' || Buffer.from(entry.bytes,'base64').toString('base64')!==entry.bytes) invalid('Invalid parent bytes');
+      if(entry?.path!==expected[n] || typeof entry.bytes!=='string' || Buffer.from(entry.bytes,'base64').toString('base64')!==entry.bytes) invalid('Invalid parent bytes');
     }
     if(versionOf(parent.files)!==parent.version || parentId(parent)!==parent.id || contentSeal(parent.files)!==parent.parentSeal) invalid('Parent seal mismatch');
     return parent;
   };
   const parentForRoot = () => {
     const entries=snapshot(io.rootRead);
-    const parent={schema:1,version:versionOf(entries),files:entries,parentSeal:contentSeal(entries)};
-    parent.id=parentId(parent);
+    const parent={schema:expanded?2:1,version:versionOf(entries),files:entries,parentSeal:contentSeal(entries)};
+    if(expanded)Object.assign(parent,{inventoryId,maintenanceRecordSha256:io.maintenanceIdentity?.()||null});
     if(parent.version==='3.3.28'){
+      if(expanded)invalid('Bootstrap inventory cannot be expanded');
       if(digest(Buffer.from(entries.find(x=>x.path==='server.js').bytes,'base64'))!=='a82d4229583de676467b7d1597919614b14d15092eb34ec3bb912c426a0df6fe') invalid('Unverified bootstrap ROOT');
     }else{
       const installed=io.read('installed');
+      if(expanded){
+        if(installed?.schema!==1 || installed.version!==parent.version)invalid('Untrusted installed ROOT');
+        if(installed.stageSeal!==parent.parentSeal){
+          const bridge=io.verifiedMaintenance?.({currentSeal:parent.parentSeal,installed});
+          if(bridge?.schema!==2 || bridge.currentSeal!==parent.parentSeal || bridge.originalSeal!==installed.stageSeal || bridge.version!==installed.version || bridge.stageId!==installed.stageId || !/^[a-f0-9]{64}$/.test(bridge.recordSha256||'') || bridge.authorizesApply!==false || bridge.authorizesRelease!==false || bridge.authorizesPublish!==false)invalid('Missing authenticated inventory transition');
+          parent.maintenanceRecordSha256=bridge.recordSha256;
+        }
+      }else{
       if(installed?.schema!==1 || installed.version!==parent.version || installed.stageSeal!==(io.acceptedInstalledSeal?io.acceptedInstalledSeal(parent.parentSeal):parent.parentSeal)) invalid('Untrusted installed ROOT');
+      }
       const child=io.read('child-'+installed.stageId), approved=io.read('seal-'+installed.stageId);
       if(!child || !approved || approved.stageId!==installed.stageId || approved.stageSeal!==installed.stageSeal || child.baseStageId!==approved.baseStageId || child.parentSeal!==approved.parentSeal) invalid('Missing installed lineage evidence');
       const prior=verify(io.read('parent-'+child.baseStageId.slice(5)));
       if(prior.parentSeal!==child.parentSeal) invalid('Installed parent mismatch');
     }
+    parent.id=parentId(parent);
     return verify(parent);
   };
   const validId = id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -58,7 +75,8 @@ function nativeLineageStore(io, files) {
     if(binding.parentSeal!==parent.parentSeal || JSON.stringify(binding.parentReference)!==JSON.stringify(reference(parent))) invalid('Rebound parent evidence');
     const current=parentForRoot();
     if(current.id!==parent.id) invalid('ROOT changed after binding');
-    const entries=snapshot(file=>io.stageRead(id,file));
+    const entries=io.stageSnapshot?io.stageSnapshot(id,files):snapshot(file=>io.stageRead(id,file));
+    if(!Array.isArray(entries)||entries.length!==files.length||entries.some((entry,index)=>entry.path!==files[index]||typeof entry.bytes!=='string'||Buffer.from(entry.bytes,'base64').toString('base64')!==entry.bytes))invalid('Invalid stage snapshot');
     if(parent.version==='3.3.28' && versionOf(entries)!=='3.3.29') invalid('Invalid bootstrap successor');
     const changed=files.filter((file,index)=>entries[index].bytes!==parent.files[index].bytes);
     const canonical={...binding,changedFilesVsBase:changed,changedFilesVsRoot:[...changed],changedFiles:[...changed],stageSeal:contentSeal(entries),rootSeal:current.parentSeal};
@@ -70,7 +88,7 @@ function nativeLineageStore(io, files) {
   const approve = id => {const canonical=resolve(id);io.writeOnce('seal-'+id,canonical);return canonical;};
   return {create,resolve,approve,verify,parentForRoot};
 }
-function lineageHostIO(root=ROOT,devDir=DEV_DIR) {
+function lineageHostIO(root=ROOT,devDir=DEV_DIR,allowedFiles=APP_FILES) {
   const directory=path.join(devDir,'.lineage');
   const unlinked = filename => {
     const absolute=path.resolve(filename);let current=path.parse(absolute).root;
@@ -88,8 +106,15 @@ function lineageHostIO(root=ROOT,devDir=DEV_DIR) {
     read:key=>{const file=filename(key);return fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):null;},
     writeOnce:(key,value)=>{unlinked(directory);fs.mkdirSync(directory,{recursive:true});fs.writeFileSync(filename(key),JSON.stringify(value),{flag:'wx'});},
     rootRead:file=>fs.readFileSync(unlinked(path.join(root,file))),
+    maintenanceIdentity:()=>require(path.join(staging,'maintenance-host.cjs')).createHost().identity(root),
+    verifiedMaintenance:({currentSeal})=>{const native=require(path.join(staging,'server.js'));const accepted=native.hostRootProvenance(root);if(accepted.currentSeal!==currentSeal)throw Error('Maintained ROOT mismatch');return {...accepted,version:accepted.installedVersion,stageId:accepted.installedStageId,authorizesApply:false,authorizesRelease:false,authorizesPublish:false};},
     acceptedInstalledSeal:currentSeal=>{const native=require(path.join(staging,'server.js'));const provenance=native.hostRootProvenance(root);if(provenance.currentSeal!==currentSeal)throw Error('Maintained ROOT mismatch');return provenance.originalSeal;},
-    stageRead:(id,file)=>{const stage=unlinked(path.join(devDir,id));inventoryDevStage(stage);return fs.readFileSync(unlinked(path.join(stage,file)));}
+    stageSnapshot:(id,files)=>{
+      if(JSON.stringify(files)!==JSON.stringify(allowedFiles))throw Error('Stage inventory identity mismatch');
+      const stage=unlinked(path.join(devDir,id));inventoryDevStage(stage,allowedFiles);
+      return files.map(file=>({path:file,bytes:fs.readFileSync(unlinked(path.join(stage,file))).toString('base64')}));
+    },
+    stageRead:(id,file)=>{if(!allowedFiles.includes(file))throw Error('Stage read outside inventory');const stage=unlinked(path.join(devDir,id));return fs.readFileSync(unlinked(path.join(stage,file)));}
   };
 }
 
@@ -176,12 +201,13 @@ function safe(rel) {
 }
 
 
-const APP_FILES = ["server.js","updater.js","public/index.html","start.cmd","stop.cmd","setup-local-model.cmd","setup-github.cmd","background-launcher.js","setup-autostart.cmd","disable-autostart.cmd","README.md",".gitignore"];
-function validateAutoManifest(manifest) {
+const HISTORICAL_APP_FILES = ["server.js","updater.js","public/index.html","start.cmd","stop.cmd","setup-local-model.cmd","setup-github.cmd","background-launcher.js","setup-autostart.cmd","disable-autostart.cmd","README.md",".gitignore"];
+const APP_FILES=Object.freeze(require('./maintenance-host.cjs').createHost().select(root,HISTORICAL_APP_FILES));
+function validateAutoManifest(manifest, allowedFiles=APP_FILES) {
   if (!manifest?.auto?.enabled || manifest.auto.expectedVersion !== manifest.version || !/^\d+\.\d+\.\d+$/.test(manifest.version) || !manifest.auto.oldInstance || !Array.isArray(manifest.files) || !manifest.files.length) throw new Error('Manifest autonomo non valido');
   const seen = new Set();
   for (const f of manifest.files) {
-    if (!APP_FILES.includes(f.path) || seen.has(f.path) || !/^[a-f0-9]{64}$/i.test(f.sha256)) throw new Error('Allowlist/checksum autonomo non valido');
+    if (!allowedFiles.includes(f.path) || seen.has(f.path) || !/^[a-f0-9]{64}$/i.test(f.sha256)) throw new Error('Allowlist/checksum autonomo non valido');
     seen.add(f.path);
   }
 }
@@ -210,22 +236,22 @@ async function smokeAuto(version,instance,deps={}) {
   if(!state || typeof state.enabled!=='boolean' || !Number.isInteger(state.activeJobCount)) throw new Error('Smoke Remote fallito');
 }
 
-function inventoryDevStage(stage) {
+function inventoryDevStage(stage, allowedFiles=APP_FILES) {
   const found=[];
   const walk=(directory,prefix='')=>{
     if(fs.lstatSync(directory).isSymbolicLink())throw Error('Stage link');
     for(const item of fs.readdirSync(directory,{withFileTypes:true})){
       const rel=prefix+item.name;
       if(item.isSymbolicLink())throw Error('Stage link');
-      if(item.isDirectory()){if(!APP_FILES.some(f=>f.startsWith(rel+'/')))throw Error('Stage directory');walk(path.join(directory,item.name),rel+'/');}
-      else if(item.isFile() && APP_FILES.includes(rel))found.push(rel);
+      if(item.isDirectory()){if(!allowedFiles.some(f=>f.startsWith(rel+'/')))throw Error('Stage directory');walk(path.join(directory,item.name),rel+'/');}
+      else if(item.isFile() && allowedFiles.includes(rel))found.push(rel);
       else if(!item.isFile() || prefix || rel!=='manifest.json')throw Error('Stage file');
     }
   };
-  walk(stage);if(APP_FILES.some(f=>!found.includes(f)))throw Error('Stage missing file');return found;
+  walk(stage);if(allowedFiles.some(f=>!found.includes(f)))throw Error('Stage missing file');return found;
 }
 let verifiedApply=null;
-function verifyApplyLineage(manifest) {
+function verifyApplyLineage(manifest, allowedFiles=APP_FILES, historicalFiles=HISTORICAL_APP_FILES) {
   if(nativeManifestArgument&&path.basename(nativeManifestArgument)!==manifest.releaseAttemptId+'.json')throw Error('Native manifest authority mismatch');
   const stage=fs.realpathSync(staging), installed=fs.realpathSync(root), id=path.basename(stage);
   if(path.resolve(staging)!==stage || path.resolve(root)!==installed ||
@@ -233,8 +259,8 @@ function verifyApplyLineage(manifest) {
      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ||
      path.resolve(__filename)!==path.join(stage,'updater.js') || fs.realpathSync(__filename)!==path.join(stage,'updater.js') ||
      path.resolve(process.argv[1])!==path.join(stage,'updater.js') || fs.realpathSync(process.argv[1])!==path.join(stage,'updater.js'))throw Error('Apply execution identity mismatch');
-  const io=lineageHostIO(installed,path.join(installed,'.dev-work'));
-  const store=nativeLineageStore(io,APP_FILES), parent=store.parentForRoot();
+  const io=lineageHostIO(installed,path.join(installed,'.dev-work'),allowedFiles);
+  const store=nativeLineageStore(io,allowedFiles,historicalFiles), parent=store.parentForRoot();
   const version=io.stageRead(id,'server.js').toString().match(/const VERSION = "([^"]+)";/)?.[1];
   const legacy=parent.version==='3.3.28' && version==='3.3.29' && oldVersion==='3.3.28' && io.read('installed')===null;
   if(oldVersion!==parent.version || version!==manifest.version)throw Error('Apply version mismatch');
@@ -247,7 +273,7 @@ function verifyApplyLineage(manifest) {
   if(legacy){
     // Construct exclusively from verified installed bytes and staged bytes, never developer fields.
     const records=new Map();
-    const memory=nativeLineageStore({...io,read:key=>records.get(key)||null,writeOnce:(key,value)=>records.set(key,value)},APP_FILES);
+    const memory=nativeLineageStore({...io,read:key=>records.get(key)||null,writeOnce:(key,value)=>records.set(key,value)},allowedFiles,historicalFiles);
     memory.create(id);canonical=memory.approve(id);
     for(const key of ['parent-'+parent.id.slice(5),'child-'+id,'seal-'+id]){
       const existing=io.read(key);
@@ -265,7 +291,7 @@ function verifyApplyLineage(manifest) {
     canonical=store.resolve(id,manifest,true);
   }
   if(!Array.isArray(manifest.files) || JSON.stringify(manifest.files.map(f=>f.path))!==JSON.stringify(canonical.changedFilesVsRoot))throw Error('Apply manifest mismatch');
-  for(const file of manifest.files)if(!APP_FILES.includes(file.path) || crypto.createHash('sha256').update(io.stageRead(id,file.path)).digest('hex')!==file.sha256)throw Error('Apply source mismatch');
+  for(const file of manifest.files)if(!allowedFiles.includes(file.path) || crypto.createHash('sha256').update(io.stageRead(id,file.path)).digest('hex')!==file.sha256)throw Error('Apply source mismatch');
   verifyNativeReleaseAuthority(manifest,canonical);
   verifiedApply={...canonical,version,devId:id,parent};
   return canonical;
@@ -281,11 +307,11 @@ function verifyNativeReleaseAuthority(manifest,canonical) {
   nativeExecutorClaim=crypto.randomUUID();record.applyReceipt.executorClaim=nativeExecutorClaim;record.applyReceipt.sideEffectState='HANDOFF_CONFIRMED';
   const revision=record.revision;record.revision++;record.updatedAt=new Date().toISOString();store.commit(record.releaseAttemptId,record,revision);
 }
-function recordInstalledLineage(manifest) {
+function recordInstalledLineage(manifest, allowedFiles=APP_FILES, historicalFiles=HISTORICAL_APP_FILES) {
   if(!verifiedApply)throw Error('Missing verified Apply');
-  const seal=APP_FILES.map(f=>f+':'+crypto.createHash('sha256').update(fs.readFileSync(path.join(root,f))).digest('hex')).join('|');
+  const seal=allowedFiles.map(f=>f+':'+crypto.createHash('sha256').update(fs.readFileSync(path.join(root,f))).digest('hex')).join('|');
   if(seal!==verifiedApply.stageSeal)throw Error('Installed seal mismatch');
-  const io=lineageHostIO(root,path.join(root,'.dev-work')), id=verifiedApply.stageId;
+  const io=lineageHostIO(root,path.join(root,'.dev-work'),allowedFiles), id=verifiedApply.stageId;
   const {parent,version,devId,...canonical}=verifiedApply;
   for(const [key,value] of [['parent-'+parent.id.slice(5),parent],['child-'+id,{schema:1,stageId:id,baseStageId:canonical.baseStageId,parentReference:canonical.parentReference,parentSeal:canonical.parentSeal}],['seal-'+id,canonical]]){
     const existing=io.read(key);
@@ -295,11 +321,11 @@ function recordInstalledLineage(manifest) {
   }
   const receipt={schema:1,version,stageId:id,devId:id,stageSeal:seal,serverHash:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,'server.js'))).digest('hex'),baseStageId:canonical.baseStageId,parentReference:canonical.parentReference,parentSeal:canonical.parentSeal,at:new Date().toISOString()};
   writeAtomic(path.join(root,'.dev-work','.lineage','installed.json'),receipt);
-  nativeLineageStore(io,APP_FILES).parentForRoot();
+  nativeLineageStore(io,allowedFiles,historicalFiles).parentForRoot();
 }
-function installVerifiedFiles(manifest,backup) {
+function installVerifiedFiles(manifest,backup, allowedFiles=APP_FILES, historicalFiles=HISTORICAL_APP_FILES) {
   const sources=manifest.files.map(f=>{
-    if(!APP_FILES.includes(f.path) || !safe(f.path))throw Error('Invalid install path');
+    if(!allowedFiles.includes(f.path) || !safe(f.path))throw Error('Invalid install path');
     const dest=path.join(root,f.path), bytes=fs.readFileSync(path.join(staging,f.path));
     if(crypto.createHash('sha256').update(bytes).digest('hex')!==f.sha256)throw Error('Changed Apply source');
     const original=fs.existsSync(dest)?fs.readFileSync(dest):null;
@@ -309,10 +335,10 @@ function installVerifiedFiles(manifest,backup) {
   const prior=fs.existsSync(receiptFile)?fs.readFileSync(receiptFile):null;
   for(const f of sources)if(f.original){const b=path.join(backup,f.file);fs.mkdirSync(path.dirname(b),{recursive:true});fs.writeFileSync(b,f.original);if(!fs.readFileSync(b).equals(f.original))throw Error('Backup verification failed');}
   // Revalidate after the complete verified backup, before the first installed byte changes.
-  verifyApplyLineage(manifest);
+  verifyApplyLineage(manifest,allowedFiles,historicalFiles);
   try {
     for(const f of sources){fs.mkdirSync(path.dirname(f.dest),{recursive:true});const tmp=f.dest+'.'+crypto.randomUUID()+'.tmp';try{fs.writeFileSync(tmp,f.bytes,{flag:'wx'});fs.renameSync(tmp,f.dest);}finally{if(fs.existsSync(tmp))fs.unlinkSync(tmp);}}
-    recordInstalledLineage(manifest);
+    recordInstalledLineage(manifest,allowedFiles,historicalFiles);
   }catch(error){
     for(const f of sources){if(f.original){const bytes=fs.readFileSync(path.join(backup,f.file));if(!bytes.equals(f.original))throw Error('Rollback backup corrupted');fs.writeFileSync(f.dest,bytes);}else if(fs.existsSync(f.dest))fs.unlinkSync(f.dest);}
     if(prior)writeAtomic(receiptFile,JSON.parse(prior));else if(fs.existsSync(receiptFile))fs.unlinkSync(receiptFile);

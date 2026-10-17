@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.35";
+const VERSION = "3.3.36";
 const EMAIL_TEST_MODE = process.argv.includes('--email-event-test');
 const SEAL_MODE = process.argv.includes("--seal-dev-stage");
 const LINEAGE_TEST_MODE = process.argv.includes('--p1-lineage-test');
@@ -34,7 +34,10 @@ const DEV_DIR = path.join(ROOT, ".dev-work");
 const GITHUB_REPO = "MarcoAnyWhere/Marco-AI-Team";
 const GITHUB_CLONE_URL = "https://github.com/MarcoAnyWhere/Marco-AI-Team.git";
 // Application files shared by staging, manifests, publishing and updates.
-const DEV_FILES = ["server.js","updater.js","public/index.html","start.cmd","stop.cmd","setup-local-model.cmd","setup-github.cmd","background-launcher.js","setup-autostart.cmd","disable-autostart.cmd","README.md",".gitignore"];
+const HISTORICAL_DEV_FILES = ["server.js","updater.js","public/index.html","start.cmd","stop.cmd","setup-local-model.cmd","setup-github.cmd","background-launcher.js","setup-autostart.cmd","disable-autostart.cmd","README.md",".gitignore"];
+const HISTORICAL_TEST_MODE=WORK_TEST_MODE&&!RELEASE_NATIVE_MODE&&!SEAL_MODE;
+const maintenanceHost=require('./maintenance-host.cjs').createHost();
+const DEV_FILES=Object.freeze(HISTORICAL_TEST_MODE?[...HISTORICAL_DEV_FILES]:maintenanceHost.select(ROOT,HISTORICAL_DEV_FILES));
 
 const SYSTEM_CONTEXT = `CONTESTO REALE DI MARCO AI TEAM:
 - Codex CLI è autenticato con ChatGPT Plus; non stiamo usando OpenAI API a consumo.
@@ -227,37 +230,54 @@ function nextPatchVersion(v) {
 
 
 // The host retains verified parent bytes and write-once child bindings outside stages.
-function nativeLineageStore(io, files) {
+function nativeLineageStore(io, files, historicalFiles=files) {
   const digest = value => crypto.createHash('sha256').update(value).digest('hex');
   const invalid = message => { throw Object.assign(new Error(message), {failureCause:'LINEAGE_INVALID'}); };
   const immutable = value => { if(value && typeof value === 'object'){ for(const item of Object.values(value)) immutable(item); Object.freeze(value); } return value; };
   const snapshot = reader => files.map(file => ({path:file, bytes:reader(file).toString('base64')}));
   const contentSeal = entries => entries.map(entry => entry.path + ':' + digest(Buffer.from(entry.bytes,'base64'))).join('|');
-  const parentId = parent => 'root:' + digest(JSON.stringify({version:parent.version,files:parent.files}));
+  const expanded=JSON.stringify(files)!==JSON.stringify(historicalFiles);
+  const inventoryId=digest(JSON.stringify(files));
+  const parentId = parent => 'root:' + digest(JSON.stringify(parent.schema===2?
+    {schema:2,version:parent.version,files:parent.files,inventoryId:parent.inventoryId,maintenanceRecordSha256:parent.maintenanceRecordSha256}:
+    {version:parent.version,files:parent.files}));
   const versionOf = entries => Buffer.from(entries.find(entry=>entry.path==='server.js').bytes,'base64').toString('utf8').match(/const VERSION = "([^"]+)";/)?.[1];
   const verify = parent => {
-    if(parent?.schema !== 1 || !Array.isArray(parent.files) || parent.files.length !== files.length) invalid('Missing parent snapshot');
-    for(let n=0;n<files.length;n++){
+    const expected=parent?.schema===1?historicalFiles:files;
+    if(![1,2].includes(parent?.schema) || !Array.isArray(parent.files) || parent.files.length!==expected.length) invalid('Missing parent snapshot');
+    if(parent.schema===2 && (!expanded || parent.inventoryId!==inventoryId || !(parent.maintenanceRecordSha256===null || /^[a-f0-9]{64}$/.test(parent.maintenanceRecordSha256)))) invalid('Invalid maintained parent identity');
+    for(let n=0;n<expected.length;n++){
       const entry=parent.files[n];
-      if(entry?.path!==files[n] || typeof entry.bytes!=='string' || Buffer.from(entry.bytes,'base64').toString('base64')!==entry.bytes) invalid('Invalid parent bytes');
+      if(entry?.path!==expected[n] || typeof entry.bytes!=='string' || Buffer.from(entry.bytes,'base64').toString('base64')!==entry.bytes) invalid('Invalid parent bytes');
     }
     if(versionOf(parent.files)!==parent.version || parentId(parent)!==parent.id || contentSeal(parent.files)!==parent.parentSeal) invalid('Parent seal mismatch');
     return parent;
   };
   const parentForRoot = () => {
     const entries=snapshot(io.rootRead);
-    const parent={schema:1,version:versionOf(entries),files:entries,parentSeal:contentSeal(entries)};
-    parent.id=parentId(parent);
+    const parent={schema:expanded?2:1,version:versionOf(entries),files:entries,parentSeal:contentSeal(entries)};
+    if(expanded)Object.assign(parent,{inventoryId,maintenanceRecordSha256:io.maintenanceIdentity?.()||null});
     if(parent.version==='3.3.28'){
+      if(expanded)invalid('Bootstrap inventory cannot be expanded');
       if(digest(Buffer.from(entries.find(x=>x.path==='server.js').bytes,'base64'))!=='a82d4229583de676467b7d1597919614b14d15092eb34ec3bb912c426a0df6fe') invalid('Unverified bootstrap ROOT');
     }else{
       const installed=io.read('installed');
+      if(expanded){
+        if(installed?.schema!==1 || installed.version!==parent.version)invalid('Untrusted installed ROOT');
+        if(installed.stageSeal!==parent.parentSeal){
+          const bridge=io.verifiedMaintenance?.({currentSeal:parent.parentSeal,installed});
+          if(bridge?.schema!==2 || bridge.currentSeal!==parent.parentSeal || bridge.originalSeal!==installed.stageSeal || bridge.version!==installed.version || bridge.stageId!==installed.stageId || !/^[a-f0-9]{64}$/.test(bridge.recordSha256||'') || bridge.authorizesApply!==false || bridge.authorizesRelease!==false || bridge.authorizesPublish!==false)invalid('Missing authenticated inventory transition');
+          parent.maintenanceRecordSha256=bridge.recordSha256;
+        }
+      }else{
       if(installed?.schema!==1 || installed.version!==parent.version || (installed.stageSeal!==parent.parentSeal && io.acceptedInstalledSeal?.(parent.parentSeal)!==installed.stageSeal)) invalid('Untrusted installed ROOT');
+      }
       const child=io.read('child-'+installed.stageId), approved=io.read('seal-'+installed.stageId);
       if(!child || !approved || approved.stageId!==installed.stageId || approved.stageSeal!==installed.stageSeal || child.baseStageId!==approved.baseStageId || child.parentSeal!==approved.parentSeal) invalid('Missing installed lineage evidence');
       const prior=verify(io.read('parent-'+child.baseStageId.slice(5)));
       if(prior.parentSeal!==child.parentSeal) invalid('Installed parent mismatch');
     }
+    parent.id=parentId(parent);
     return verify(parent);
   };
   const validId = id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -280,7 +300,8 @@ function nativeLineageStore(io, files) {
     if(binding.parentSeal!==parent.parentSeal || JSON.stringify(binding.parentReference)!==JSON.stringify(reference(parent))) invalid('Rebound parent evidence');
     const current=parentForRoot();
     if(current.id!==parent.id) invalid('ROOT changed after binding');
-    const entries=snapshot(file=>io.stageRead(id,file));
+    const entries=io.stageSnapshot?io.stageSnapshot(id,files):snapshot(file=>io.stageRead(id,file));
+    if(!Array.isArray(entries)||entries.length!==files.length||entries.some((entry,index)=>entry.path!==files[index]||typeof entry.bytes!=='string'||Buffer.from(entry.bytes,'base64').toString('base64')!==entry.bytes))invalid('Invalid stage snapshot');
     if(parent.version==='3.3.28' && versionOf(entries)!=='3.3.29') invalid('Invalid bootstrap successor');
     const changed=files.filter((file,index)=>entries[index].bytes!==parent.files[index].bytes);
     const canonical={...binding,changedFilesVsBase:changed,changedFilesVsRoot:[...changed],changedFiles:[...changed],stageSeal:contentSeal(entries),rootSeal:current.parentSeal};
@@ -292,7 +313,7 @@ function nativeLineageStore(io, files) {
   const approve = id => {const canonical=resolve(id);io.writeOnce('seal-'+id,canonical);return canonical;};
   return {create,resolve,approve,verify,parentForRoot};
 }
-function lineageHostIO(root=ROOT,devDir=DEV_DIR) {
+function lineageHostIO(root=ROOT,devDir=DEV_DIR,allowedFiles=DEV_FILES) {
   const directory=path.join(devDir,'.lineage');
   const unlinked = filename => {
     const absolute=path.resolve(filename);let current=path.parse(absolute).root;
@@ -309,32 +330,45 @@ function lineageHostIO(root=ROOT,devDir=DEV_DIR) {
   return {
     read:key=>{const file=filename(key);return fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):null;},
     writeOnce:(key,value)=>{unlinked(directory);fs.mkdirSync(directory,{recursive:true});fs.writeFileSync(filename(key),JSON.stringify(value),{flag:'wx'});},
+    maintenanceIdentity:()=>maintenanceHost.identity(root),
+    verifiedMaintenance:({currentSeal})=>{const accepted=hostRootProvenance(root);if(accepted.currentSeal!==currentSeal)throw hostMaintenanceFailure('Host seal changed');return {...accepted,version:accepted.installedVersion,stageId:accepted.installedStageId,authorizesApply:false,authorizesRelease:false,authorizesPublish:false};},
     acceptedInstalledSeal:currentSeal=>{const accepted=hostRootProvenance(root);if(accepted.currentSeal!==currentSeal)throw hostMaintenanceFailure('Host seal changed');return accepted.originalSeal;},
     rootRead:file=>fs.readFileSync(unlinked(path.join(root,file))),
-    stageRead:(id,file)=>{const stage=unlinked(path.join(devDir,id));inventoryDevStage(stage);return fs.readFileSync(unlinked(path.join(stage,file)));}
+    stageSnapshot:(id,files)=>{
+      if(JSON.stringify(files)!==JSON.stringify(allowedFiles))throw Error('Stage inventory identity mismatch');
+      const stage=unlinked(path.join(devDir,id));inventoryDevStage(stage,allowedFiles);
+      return files.map(file=>({path:file,bytes:fs.readFileSync(unlinked(path.join(stage,file))).toString('base64')}));
+    },
+    stageRead:(id,file)=>{if(!allowedFiles.includes(file))throw Error('Stage read outside inventory');const stage=unlinked(path.join(devDir,id));return fs.readFileSync(unlinked(path.join(stage,file)));}
   };
 }
 function canonicalDevLineage(id,applying=false,expected=null) {
-  return nativeLineageStore(lineageHostIO(),DEV_FILES).resolve(id,expected,applying);
+  return nativeLineageStore(lineageHostIO(),DEV_FILES,HISTORICAL_DEV_FILES).resolve(id,expected,applying);
 }
 
-function copyAppFiles(fromRoot, toRoot) {
-  fs.mkdirSync(toRoot, { recursive: true });
-  for (const rel of DEV_FILES) {
-    const src = path.join(fromRoot, rel);
-    if (!fs.existsSync(src)) continue;
-    const dest = path.join(toRoot, rel);
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.copyFileSync(src, dest);
-  }
+function copyAppFiles(fromRoot, toRoot, allowedFiles=DEV_FILES, options={}) {
+  if(!options||Object.keys(options).some(key=>key!=='replace')||options.replace!==undefined&&typeof options.replace!=='boolean')throw Error('Invalid copy policy');
+  if(!path.isAbsolute(fromRoot)||!path.isAbsolute(toRoot)||path.resolve(fromRoot).toLowerCase()===path.resolve(toRoot).toLowerCase())throw Error('Invalid copy roots');
+  if(!Array.isArray(allowedFiles)||!allowedFiles.length)throw Error('Missing copy inventory');
+  const seen=new Set();
+  const plan=allowedFiles.map(rel=>{
+    if(typeof rel!=='string'||!/^[A-Za-z0-9_.@/-]+$/.test(rel)||rel.split('/').some(segment=>!segment||segment==='.'||segment==='..'||/[. ]$/.test(segment)||/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment))||seen.has(rel.toLowerCase()))throw Error('Invalid copy inventory path');
+    seen.add(rel.toLowerCase());
+    const src=hostUnlinked(path.join(fromRoot,rel)),dest=hostUnlinked(path.join(toRoot,rel));
+    if(!fs.statSync(src).isFile())throw Error('Required source is not a file: '+rel);
+    if(fs.existsSync(dest)&&(!options.replace||!fs.statSync(dest).isFile()))throw Error('Copy destination already exists: '+rel);
+    return {src,dest};
+  });
+  // All required sources and destination paths are checked before any write.
+  for(const {src,dest} of plan){fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(src,dest,options.replace?0:fs.constants.COPYFILE_EXCL);}
 }
 
-function changedDevFiles(stage) {
+function changedDevFiles(stage, allowedFiles=DEV_FILES) {
   const changed = [];
-  for (const rel of DEV_FILES) {
+  for (const rel of allowedFiles) {
     const a = path.join(ROOT, rel);
     const b = path.join(stage, rel);
-    if (!fs.existsSync(b)) continue;
+    if (!fs.existsSync(b)) throw Error('Required staged file missing: '+rel);
     if (!fs.existsSync(a) || sha256File(a) !== sha256File(b)) changed.push(rel);
   }
   return changed;
@@ -394,11 +428,11 @@ async function validateDevStage(stage) {
   return {passed:true,failedTests:[],criticalWarnings:[],version:targetVersion};
 }
 
-function buildManifestFromRoot(version) {
+function buildManifestFromRoot(version, allowedFiles=DEV_FILES) {
   const files = [];
-  for (const rel of DEV_FILES) {
+  for (const rel of allowedFiles) {
     const p = path.join(ROOT, rel);
-    if (!fs.existsSync(p)) continue;
+    if (!fs.existsSync(p)) throw Error('Required manifest file missing: '+rel);
     files.push({
       path: rel,
       sha256: sha256File(p),
@@ -421,15 +455,16 @@ async function confirmPublication(pub,manifest) {
   await run('git',['fetch','origin','main'],{cwd:pub,timeout:120000});
   const remote=JSON.parse((await run('git',['show','origin/main:latest.json'],{cwd:pub,timeout:30000})).out);
   if(remote.version!==manifest.version||JSON.stringify(remote.files)!==JSON.stringify(manifest.files))throw Error('Authoritative publication manifest mismatch');
-  for(const file of manifest.files){
-    const local=(await run('git',['hash-object','--',file.path],{cwd:pub,timeout:30000})).out;
-    const remoteHash=(await run('git',['rev-parse','origin/main:'+file.path],{cwd:pub,timeout:30000})).out;
-    if(local!==remoteHash)throw Error('Authoritative publication bytes mismatch');
-  }
+  const paths=manifest.files.map(file=>file.path);
+  if(paths.some(file=>typeof file!=='string'||!DEV_FILES.includes(file)||/[\r\n\0]/.test(file)))throw Error('Invalid publication inventory');
+  const local=(await run('git',['hash-object','--stdin-paths'],{cwd:pub,input:paths.join('\n')+'\n',timeout:120000,captureLimit:1048576})).out.trim().split(/\r?\n/);
+  const remoteHashes=(await run('git',['cat-file','--batch-check=%(objectname)'],{cwd:pub,input:paths.map(file=>'origin/main:'+file).join('\n')+'\n',timeout:120000,captureLimit:1048576})).out.trim().split(/\r?\n/);
+  if(local.length!==paths.length||remoteHashes.length!==paths.length||local.some((digest,index)=>! /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(digest)||digest!==remoteHashes[index]))throw Error('Authoritative publication bytes mismatch');
   publication = { revision: Date.now(), version: VERSION, confirmedAt:new Date().toISOString(),files:manifest.files,propagationState:'CDN_PENDING' };
   atomicJson(path.join(ROOT,'data','runtime','publication.json'),publication);
 }
 async function publishCurrentVersion() {
+  if(fs.existsSync(hostUnlinked(path.join(ROOT,'.dev-work','maintenance-activation.lock'))))throw httpError(409,'Manutenzione in corso: pubblicazione bloccata');
   const currentManifest=buildManifestFromRoot(VERSION);
   if(publication.confirmedAt&&publicationObservation(currentManifest).propagationState==='CONFIRMED')return {published:false,publication,message:'Pubblicazione già confermata; nessun replay.'};
   const pub = path.join(os.tmpdir(), `marco-ai-publish-${crypto.randomUUID()}`);
@@ -437,13 +472,15 @@ async function publishCurrentVersion() {
     await run("git", ["clone", GITHUB_CLONE_URL, pub], { cwd: os.tmpdir(), timeout: 120000 });
 
     await run('git',['config','core.autocrlf','false'],{cwd:pub,timeout:30000});
-    copyAppFiles(ROOT, pub);
+    copyAppFiles(ROOT, pub, DEV_FILES, {replace:true});
     const manifest = buildManifestFromRoot(VERSION);
     fs.writeFileSync(path.join(pub, "latest.json"), JSON.stringify(manifest, null, 2), "utf8");
 
     await run("git", ["config", "user.name", "MarcoAnyWhere"], { cwd: pub, timeout: 30000 });
     await run("git", ["config", "user.email", "MarcoAnyWhere@users.noreply.github.com"], { cwd: pub, timeout: 30000 });
     await run("git", ["add", "-A"], { cwd: pub, timeout: 30000 });
+    // The reviewed offline runtime is payload even when node_modules is ignored.
+    await run('git',['add','-f','--pathspec-from-file=-','--pathspec-file-nul'],{cwd:pub,input:DEV_FILES.join('\0')+'\0',timeout:120000});
 
     const status = await run("git", ["status", "--porcelain"], { cwd: pub, timeout: 30000 });
     if (!status.out.trim()) {
@@ -477,6 +514,8 @@ function hostUnlinked(file) {
 }
 function hostRootProvenance(root=ROOT) {
   try {
+    if(fs.existsSync(hostUnlinked(path.join(root,'.dev-work','maintenance-activation.lock'))))throw hostMaintenanceFailure('Maintenance activation in progress; DEV/Apply blocked');
+    const maintained=maintenanceHost.provenance(root,{nativeLineageStore,historical:HISTORICAL_DEV_FILES});if(maintained)return maintained;
     hostUnlinked(root);
     const directory=hostUnlinked(path.join(root,'.dev-work','.lineage'));
     const read=key=>JSON.parse(fs.readFileSync(hostUnlinked(path.join(directory,key+'.json')),'utf8'));
@@ -698,7 +737,7 @@ function releaseHostRoot() {
 function releaseHarness(root) {
   const fixture=path.join(root,'.dev-work','.lineage','parent-b2e83b12afb5927f0d40a9c7d418fa773e338d2cbcc659306f258fea9899345e.json');
   const bytes=fs.readFileSync(hostUnlinked(fixture));
-  const verified=nativeLineageStore({},DEV_FILES).verify(JSON.parse(bytes));
+  const verified=nativeLineageStore({},DEV_FILES,HISTORICAL_DEV_FILES).verify(JSON.parse(bytes));
   if(verified.id!=='root:b2e83b12afb5927f0d40a9c7d418fa773e338d2cbcc659306f258fea9899345e')throw Error('Unrecognized fixture');
   const source=fs.readFileSync(__filename,'utf8');
   const manifests=['--conversation-test','--p2-test','--release-controller-test','--p1-lineage-test','--p1-safety-test','--work-v2-test'];
@@ -751,7 +790,7 @@ function parseNativeReviewStream(output,allowedPaths=null) {
 function nativeReleaseHost(root=releaseHostRoot()) {
   root=hostUnlinked(path.resolve(root));if(nativeReleaseHosts.has(root))return nativeReleaseHosts.get(root);
   const directory=path.join(root,'.dev-work','.release-controller'),disk=releaseAttemptDiskStore(directory);
-  const lineage=nativeLineageStore(lineageHostIO(root,path.join(root,'.dev-work')),DEV_FILES);
+  const lineage=nativeLineageStore(lineageHostIO(root,path.join(root,'.dev-work')),DEV_FILES,HISTORICAL_DEV_FILES);
   let prepared=null;
   const observe=async record=>{
     try{
@@ -859,7 +898,7 @@ function prepareHostDevStage(root,id,emit=(...args)=>runEvent(...args)) {
   emit('HOST_PRECHECK_PASS','HOST_PRECHECK_PASS','info',4);
   emit('Preparazione staging','Preparazione staging','info',5);
   fs.mkdirSync(stage);
-  const lineageStore=nativeLineageStore(lineageHostIO(root,devDir),DEV_FILES);
+  const lineageStore=nativeLineageStore(lineageHostIO(root,devDir),DEV_FILES,HISTORICAL_DEV_FILES);
   const binding=lineageStore.create(id);
   emit('Copia file','Copia file applicativi','info',10);
   copyAppFiles(root,stage);
@@ -878,7 +917,7 @@ function verifyHostDevAttestation(prepared,root=ROOT) {
     const actual=JSON.parse(fs.readFileSync(attestationPath,'utf8'));
     if(actual.stageId!==id||actual.baseStageId!==binding.baseStageId||JSON.stringify(actual)!==JSON.stringify(attestation))throw Error('Host attestation binding changed');
     if(JSON.stringify(hostRootProvenance(root))!==JSON.stringify(provenance))throw Error('Host provenance changed during DEV');
-    const canonical=nativeLineageStore(lineageHostIO(root,path.join(root,'.dev-work')),DEV_FILES).resolve(id);
+    const canonical=nativeLineageStore(lineageHostIO(root,path.join(root,'.dev-work')),DEV_FILES,HISTORICAL_DEV_FILES).resolve(id);
     if(canonical.parentSeal!==attestation.currentSeal||canonical.baseStageId!==attestation.baseStageId)throw Error('Host parent binding changed');
     return canonical;
   }catch(error){throw Object.assign(hostMaintenanceFailure(error.message),{firstFailure:{phase:'POST_DEV_ATTESTATION_VERIFY',message:error.message}});}
@@ -965,26 +1004,26 @@ function pipelineGuard(result, validation, review) {
   if (review?.decision !== 'APPROVE' || !Array.isArray(review.criticalWarnings) || review.criticalWarnings.length || review.testsPassed !== true) return 'Review indipendente non approvata o incompleta';
   return null;
 }
-function inventoryDevStage(stage) {
+function inventoryDevStage(stage, allowedFiles=DEV_FILES) {
   const files = [];
   function visit(dir, prefix = '') {
     for (const item of fs.readdirSync(dir, {withFileTypes:true})) {
       const rel = prefix + item.name;
       if (item.isSymbolicLink()) throw new Error('Staging contiene collegamenti');
       if (item.isDirectory()) {
-        if (!DEV_FILES.some(f => f.startsWith(rel + '/'))) throw new Error('Directory fuori allowlist');
+        if (!allowedFiles.some(f => f.startsWith(rel + '/'))) throw new Error('Directory fuori allowlist');
         visit(path.join(dir,item.name),rel+'/');
-      } else if (item.isFile() && DEV_FILES.includes(rel)) files.push(rel);
+      } else if (item.isFile() && allowedFiles.includes(rel)) files.push(rel);
       else throw new Error('File fuori allowlist');
     }
   }
   if(fs.lstatSync(stage).isSymbolicLink())throw new Error("Staging collegato non consentito");
   visit(stage);
-  if (DEV_FILES.some(f => !files.includes(f))) throw new Error('File applicativo rimosso');
+  if (allowedFiles.some(f => !files.includes(f))) throw new Error('File applicativo rimosso');
   return files;
 }
-function stageSeal(stage) {
-  inventoryDevStage(stage);return DEV_FILES.map(f => f + ':' + sha256File(path.join(stage,f))).join('|');
+function stageSeal(stage, allowedFiles=DEV_FILES) {
+  inventoryDevStage(stage,allowedFiles);return allowedFiles.map(f => f + ':' + sha256File(path.join(stage,f))).join('|');
 }
 function parseDevReview(raw) {
   // Strict JSON only; never persist raw reviewer output or diagnostics.
@@ -1243,7 +1282,7 @@ async function executeAutonomousDev(task, handlers = {}, auto = {pipeline:'safe-
     const preliminary = pipelineGuard(result,validation,{decision:'APPROVE',criticalWarnings:[],testsPassed:true});
     if (preliminary) {envelope.validationStatus='failed';envelope.validationFirstFailure=guardedDevText(validation.failureCause || result.failureCause || preliminary);return stop(preliminary,{...result,failureCause:validation.failureCause || result.failureCause});}
     envelope.validationStatus='passed';result=project(result);
-    if(!WORK_TEST_MODE)Object.assign(envelope,nativeLineageStore(lineageHostIO(),DEV_FILES).approve(result.devId));
+    if(!WORK_TEST_MODE)Object.assign(envelope,nativeLineageStore(lineageHostIO(),DEV_FILES,HISTORICAL_DEV_FILES).approve(result.devId));
     result=project(result);
     if(policy==='deferred'){envelope.reviewStatus='deferred';autonomousMutationBusy=false;project();phase('awaiting_review',99);return project({...result,pipelineStatus:'awaiting_review',final:'Validazioni locali superate; review indipendente differita.'});}
     phase('reviewing',55);
@@ -3294,16 +3333,18 @@ function conversationCodexOverrides(config) {
   }
   return [...names].flatMap(name=>['-c','mcp_servers.'+name+'.enabled=false']);
 }
-async function runConversationEngine(engine,prompt,signal) {
+async function runConversationEngine(engine,prompt,signal,options={}) {
   if(signal.aborted)throw Object.assign(Error('Cancelled'),{code:'ABORT_ERR'});
   if(engine==='local')return runLocal(prompt);
   const cwd=fs.mkdtempSync(path.join(os.tmpdir(),'marco-chat-'));
   try {
     if(engine==='gemini'){
-      const catalog=await run(agyExe(),['models'],{cwd,timeout:30000,signal});
-      const model=nativeGeminiReviewModel(catalog.out);
+      const catalog=await run(agyExe(),['models'],{cwd:ROOT,timeout:30000,signal});
+      const available=catalog.out.split(/\r?\n/).map(line=>line.split('\t')[0]);
+      const model=options.modelId===undefined?nativeGeminiReviewModel(catalog.out):options.modelId;
+      if(!/^gemini-[a-z0-9.-]+-high$/.test(model)||!available.includes(model))throw Error('MODEL_UNAVAILABLE');
       const request=nativeReviewRequest(prompt,{type:'object',properties:{answer:{type:'string'}},required:['answer'],additionalProperties:false},model);request.args.push('--disable-slash-commands');
-      const response=await run(agyExe(),request.args,{cwd,input:request.input,timeout:240000,captureLimit:1048576,signal});
+      const response=await run(agyExe(),request.args,{cwd:ROOT,input:request.input,timeout:1200000,captureLimit:1048576,signal});
       const value=parseNativeReviewStream(response.out,[]);
       if(Object.keys(value).length!==1||typeof value.answer!=='string'||!value.answer.trim())throw Error('EMPTY_ANSWER');
       return value.answer;
@@ -3317,6 +3358,22 @@ async function runConversationEngine(engine,prompt,signal) {
     if(!answer)throw Error('EMPTY_ANSWER');return answer;
   } finally {for(const name of ['answer.txt']){try{fs.unlinkSync(path.join(cwd,name));}catch{}}try{fs.rmdirSync(cwd);}catch{}}
 }
+
+async function marcoCommandSelect(role,signal){
+  const catalog=await run(agyExe(),['models'],{cwd:ROOT,timeout:30000,signal});
+  const ids=[...new Set(catalog.out.split(/\r?\n/).map(line=>line.split('\t')[0]).filter(id=>/^gemini-[a-z0-9.-]+-high$/.test(id)))];
+  const models=ids.flatMap(id=>{const family=/flash/.test(id)?'flash':/argon/.test(id)?'argon':/pro/.test(id)?'pro':null;return family?[{id,family,available:true,certifiedRoles:family==='flash'?['simple']:['simple','architecture']}]:[];});
+  models.push({id:'codex/configured-default',family:'codex',available:true,certifiedRoles:['simple','architecture']});
+  const quotas=await conversationQuotas(),now=Date.now(),windows={};
+  for(const w of quotas.gemini?.windows||[])windows[w.bucket]={remainingPercent:w.remainingPercent,observedAt:Date.parse(quotas.gemini.observedAt),resetsAt:w.resetsAt*1000};
+  const codex=quotas.codex,observedAt=Date.parse(codex?.observedAt);
+  const sorted=[...(codex?.windows||[])].sort((a,b)=>a.durationMins-b.durationMins);
+  if(sorted.length===2){for(const [i,key] of ['codex-short','codex-weekly'].entries())windows[key]={remainingPercent:sorted[i].remainingPercent,observedAt,resetsAt:sorted[i].resetsAt*1000};}
+  const reserve=codex?.blocked===true||Number.isFinite(observedAt)&&now>=observedAt&&now-observedAt<=300000&&sorted.some(w=>Number.isFinite(w.resetsAt)&&w.resetsAt*1000>now&&Number.isFinite(w.remainingPercent)&&w.remainingPercent>=0&&w.remainingPercent<=10);
+  const choice=require('./mcp-gemini.cjs').selectModel({role,models,quota:windows,now,codexReserve:reserve});
+  return choice.status==='selected'?{...choice,engine:choice.family==='codex'?'codex':'gemini'}:choice;
+}
+
 async function answerConversation(thread,turnId,signal,deps={}) {
   const repository=deps.repository||conversations,runner=deps.runner||runConversationEngine;
   const doc=repository.get(thread),turn=doc.turns.find(t=>t.id===turnId);
@@ -3390,8 +3447,34 @@ async function conversationRoute(req,res) {
   throw httpError(404,'Percorso conversazione non trovato.');
 }
 
+async function marcoItAskGeminiRoute(req,res,runner=runConversationEngine) {
+  const abort=new AbortController();
+  const cancel=()=>{if(!res.writableEnded)abort.abort();};
+  req.on('aborted',cancel);res.on('close',cancel);
+  try {
+    if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress))throw httpError(403,'Accesso consentito solo da loopback.');
+    if(!['127.0.0.1:'+PORT,'localhost:'+PORT].includes(req.headers.host))throw httpError(403,'Host non autorizzato.');
+    guardWorkRequest(req);
+    if(req.method!=='POST'){res.setHeader('Allow','POST');throw httpError(405,'Usare POST.');}
+    const body=await readJsonBody(req);
+    if(Object.keys(body).some(key=>key!=='prompt')||typeof body.prompt!=='string'||!body.prompt.trim())throw httpError(400,'Fornire esclusivamente un prompt stringa non vuoto.');
+    if(req.aborted||res.destroyed)abort.abort();
+    const answer=await runner('gemini',body.prompt,abort.signal);
+    if(!abort.signal.aborted)sendJson(res,200,{provider:'gemini',answer});
+  } catch(error) {
+    if(!res.destroyed&&!res.writableEnded){
+      const failure=error.status?{code:'INVALID_REQUEST',message:error.message}:aiFailure(error);
+      const status=error.status||({TIMEOUT:504,CLI_UNAVAILABLE:503,AUTH_REQUIRED:503,MODEL_UNAVAILABLE:503,QUOTA_OR_RATE_LIMIT:429,CANCELLED:499}[failure.code]||502);
+      sendJson(res,status,{error:failure.message,code:failure.code});
+    }
+  } finally {req.removeListener('aborted',cancel);res.removeListener('close',cancel);}
+}
+Object.assign(module.exports,{marcoItAskGeminiRoute});
+
 const server = http.createServer(async (req, res) => {
   try {
+    if(req.url.split('?')[0]==='/mcp')return await require('./mcp-gemini.cjs').handleMcpRequest(req,res,{runner:runConversationEngine,classifyError:aiFailure,readJsonBody,version:VERSION,port:PORT,commandSelect:marcoCommandSelect,commandDirectory:WORK_TEST_MODE?undefined:path.join(ROOT,'data','marco-commands'),jobDirectory:WORK_TEST_MODE?undefined:path.join(ROOT,'data','gemini-jobs')});
+    if(req.url==='/api/marco-it/ask-gemini')return await marcoItAskGeminiRoute(req,res);
     if(req.url.startsWith('/api/conversation/'))return await conversationRoute(req,res);
     if(req.url.startsWith('/api/email/'))return await emailRoute(req,res);
     if(req.url.startsWith('/api/work/')||req.url==='/api/agents/work')guardWorkRequest(req);
@@ -4005,7 +4088,7 @@ async function nativeLineageTargetedChecks() {
   const fixturePath=fixtureRoots.map(root=>path.join(root,'.dev-work','.lineage',fixtureName)).find(file=>fs.existsSync(file));
   if(!fixturePath)throw Error('LINEAGE_FIXTURE_MISSING');
   const fixtureBytes=fs.readFileSync(fixturePath);
-  const fixture=nativeLineageStore({},DEV_FILES).verify(JSON.parse(fixtureBytes));
+  const fixture=nativeLineageStore({},DEV_FILES,HISTORICAL_DEV_FILES).verify(JSON.parse(fixtureBytes));
   assert.equal(fixture.id,'root:b2e83b12afb5927f0d40a9c7d418fa773e338d2cbcc659306f258fea9899345e');
   const baseline=Object.fromEntries(fixture.files.map(entry=>[entry.path,Buffer.from(entry.bytes,'base64')]));
   const id='00000000-0000-4000-8000-000000000011';

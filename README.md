@@ -430,3 +430,46 @@ Quote disponibili in alto prima della chat, con riquadri Codex e Gemini, finestr
 ## 3.3.35 — Lettura ufficiale quote Gemini
 Aggiorna Gemini usa /usage della CLI con un terminale virtuale Git già installato, senza chiamare modelli. Aggiornamento esplicito, durata circa 20 secondi; dati validi cinque minuti, poi indicati come scaduti e non usati dal router. Distinzione fra Gemini Pro/Flash e Gemini 4 Argon. La configurazione locale data/gemini-quota-config.json deve abilitare la sola cartella di prova autorizzata. Nessuna configurazione viene distribuita con credenziali o percorsi personali.
 La barra di stato esistente non viene sostituita; lettura rifiutata se Antigravity è già in uso. Hook e fiducia temporanea sono registrati e rimossi a fine lettura, preservando modifiche concorrenti estranee. Recupero del journal al riavvio, se il processo titolare non esiste. Il collector conserva solo bucket riconosciuti, percentuale e reset; scarta email, percorsi e cronologia. I campi quota restano separati dal payload privato della CLI. Nessuna installazione automatica di dipendenze, API a consumo o polling che modifichi periodicamente la configurazione.
+
+### Antigravity Test Runner (local MCP)
+
+After restarting the local server, `/mcp` exposes `run_project_test` alongside
+its existing tools. Call with exactly `{"testId":"p1-lineage"}`. Allowed IDs:
+
+| ID | Fixed Node flag |
+| --- | --- |
+| p1-lineage | --p1-lineage-test |
+| p1-safety | --p1-safety-test |
+| p2 | --p2-test |
+| conversation | --conversation-test |
+
+The runner uses the current Node executable and absolute `server.js`, with cwd
+set to the repository root, no shell, no free arguments, and no retries.
+One test runs at a time; concurrent calls return `BUSY`. Each run has a 60-second
+limit and captures at most 64 KiB per output stream; overflow or timeout kills
+the child (up to one additional second to collect termination). Results contain
+`testId`, `ok`, `exitCode`, `durationMs`, `stdout`, `stderr`, `firstFailure`, and
+an `error` code for runner failures. `firstFailure` is extracted from captured
+JSON lines when available; it can be null even on failure. Invalid inputs are
+rejected before spawning. Existing localhost/Host/Origin MCP checks apply.
+
+This feature does not invoke AI providers or change quota/routing policy.
+Regression checks: `npm test`; the four existing suites can also be invoked
+through the tool. The source changes require a server restart; no automatic
+restart or plugin configuration change is performed. Existing clients connected
+to this MCP endpoint can discover the new tool after reconnecting. A separately
+packaged Marco IT plugin with a fixed tool catalog must add `run_project_test`
+to that catalog as a separate plugin update.
+
+
+## Marco IT: comando MCP unico (M2)
+
+Sul trasporto locale `/mcp`, il tool `marco_it` esegue consulenza testuale e analisi architetturale tramite i motori già configurati. Non abilita lo sviluppo automatico, non modifica repository e non applica release. `ask_gemini` resta disponibile con il contratto precedente.
+
+Inviare `action: "start"`, un `requestId` UUID nuovo, `prompt` e `role` (`simple` o `architecture`). Recuperare il risultato con `action: "status"` e lo stesso `requestId`; ripetere start con gli stessi dati restituisce la stessa esecuzione, senza seconda inferenza. Non generare un nuovo ID per aggirare un errore. Risposta: stato, motore, modello/configurazione predefinita Codex, motivo e risposta finale quando disponibile.
+
+Flash è preferito per attività semplici, Argon per architettura; selezione limitata ai modelli realmente presenti. Le quote sconosciute restano tali; percentuali di provider diversi non vengono confrontate. Codex in riserva è escluso. Nessun fallback automatico dopo l'avvio.
+
+`cancel` richiede la cancellazione della stessa esecuzione. Timeout, riavvio o arresto non verificato producono `needs_reconciliation`, senza replay. `reconcile` non riavvia il lavoro e resta bloccato senza conferma host positiva dell'arresto; questo incremento non introduce tale autorità di arresto per i processi preesistenti.
+
+Accesso e protezioni del server MCP locale restano invariati. I prompt e i risultati sono conservati localmente in `data/marco-commands`. Nessuna nuova API key o dipendenza. Gli adattatori di sviluppo e i loro gate di esclusività, cancellazione e review indipendente appartengono al successivo M3.

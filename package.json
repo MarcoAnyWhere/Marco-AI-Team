@@ -1,0 +1,17 @@
+{
+  "name": "marco-ai-team",
+  "private": true,
+  "version": "3.3.36",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test marco-it-ask-gemini.test.cjs mcp-gemini.test.cjs project-test-runner.test.cjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "4.6.7"
+  }
+}
