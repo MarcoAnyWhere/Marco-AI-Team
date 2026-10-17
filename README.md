@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.33 (staging)
+3.3.34 (staging)
 
 OAuth Gmail Desktop: campo password Client secret, mai precompilato o restituito dalle
 API; lo stato espone solo `clientSecretConfigured`. Un campo vuoto conserva il secret
@@ -423,3 +423,6 @@ Microfono: dettatura locale se supportata dal browser e con pacchetto italiano g
 Le funzioni di sviluppo, rilascio, email e ricerca dettagliata rimangono in Operazioni avanzate. La chat ordinaria produce testo e non avvia DEV/Apply/Publish. Ricerca lavoro in chat: «Cerca offerte secondo il mio profilo». Per criteri diversi aggiornare prima Profilo lavoro; le richieste non riconosciute chiedono di specificarlo anziché ignorare i vincoli. La copertura è limitata ai feed configurati: sono visibili esclusioni per ruolo, località e RAL, e board non configurati. Zero risultati non significa assenza di opportunità sul mercato.
 
 Stabilità: identificativi di invio idempotenti, nessuna ripetizione automatica dei turni interrotti, errori tipizzati, conservazione delle etichette dei ruoli nella traccia, test della UI basato sulla dicitura di sicurezza corrente. I gate nativi di rilascio restano obbligatori.
+
+## 3.3.34 — Quote in evidenza e stabilità
+Quote disponibili in alto prima della chat, con riquadri Codex e Gemini, finestre distinte, percentuale restante, ripristino e ultima rilevazione. Aggiornamento automatico ogni minuto e al ritorno sulla pagina; indisponibilità esplicita, nessuna quota Gemini inventata. Selettori contenuti su schermi stretti. Fixture OAuth con singolo timestamp e parser nativo dei checkpoint con schema chiuso; strumenti e payload estranei restano rifiutati.

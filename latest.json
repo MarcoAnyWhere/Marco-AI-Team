@@ -1,10 +1,10 @@
 {
-  "version": "3.3.33",
-  "notes": "Marco AI Team v3.3.33 pubblicata dall'Agente Sviluppo locale.",
+  "version": "3.3.34",
+  "notes": "Marco AI Team v3.3.34 pubblicata dall'Agente Sviluppo locale.",
   "files": [
     {
       "path": "server.js",
-      "sha256": "ef81d290aba2f5cbc7a13fc24088b9c2afb88933a067e208d8215786e45fcd43",
+      "sha256": "38996225233879dad1718405f6ea177db522f1eddf36e9f8fd29fb7495182359",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/server.js"
     },
     {
@@ -14,7 +14,7 @@
     },
     {
       "path": "public/index.html",
-      "sha256": "bb49a022bd67092e5e12cee31a0d49a4154fde6056bff3cb62757f4f5a173704",
+      "sha256": "3bb0586b039e70a9ddccf579357b772e11bca53603b4e21e7d8c1bb7e6afab9d",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/public/index.html"
     },
     {
@@ -54,7 +54,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "10303b877a40b4caf975f7a0f3b50f72f81c7cf7f7f388fbbebe1e01e972b32f",
+      "sha256": "1b7aab4b570e24e5b8c8deb07ef3697439050c8191352b9b8f4128d3ecfbbbd7",
       "url": "https://raw.githubusercontent.com/MarcoAnyWhere/Marco-AI-Team/main/README.md"
     },
     {

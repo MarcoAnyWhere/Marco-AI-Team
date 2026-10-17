@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const VERSION = "3.3.33";
+const VERSION = "3.3.34";
 const EMAIL_TEST_MODE = process.argv.includes('--email-event-test');
 const SEAL_MODE = process.argv.includes("--seal-dev-stage");
 const LINEAGE_TEST_MODE = process.argv.includes('--p1-lineage-test');
@@ -702,7 +702,7 @@ function releaseHarness(root) {
   const source=fs.readFileSync(__filename,'utf8');
   const manifests=['--conversation-test','--p2-test','--release-controller-test','--p1-lineage-test','--p1-safety-test','--work-v2-test'];
   const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
-  return {harnessHash:hash(source),testSuiteVersion:'release-controller-v2/conversation-v1+T01-T25+T16B+T17B/5',fixtureManifestHash:hash(bytes),manifestHash:hash(JSON.stringify(manifests)),manifests};
+  return {harnessHash:hash(source),testSuiteVersion:'release-controller-v2/quota-ui+single-clock+checkpoint/6',fixtureManifestHash:hash(bytes),manifestHash:hash(JSON.stringify(manifests)),manifests};
 }
 // Streaming avoids Windows argv limits without truncating review evidence.
 function nativeGeminiReviewModel(catalog) {
@@ -724,6 +724,11 @@ function parseNativeReviewStream(output,allowedPaths=null) {
     if(/tool|command|permission_request/.test(entry.event||'')&&entry.event!=='init')throw Error('REVIEW_TOOL_USE_FORBIDDEN');
     if(entry.event!=='step_update')continue;
     const step=entry.step_update;
+    if(step?.step_type==='checkpoint'){
+      const keys=Object.keys(step).sort().join(',');
+      if(Object.keys(entry).sort().join(',')!=='event,step_update'||keys!=='conversation_id,duration_seconds,state,step_index,step_type'||!uuidPattern.test(step.conversation_id||'')||step.state!=='DONE'||!Number.isSafeInteger(step.step_index)||step.step_index<0||!Number.isFinite(step.duration_seconds)||step.duration_seconds<0)throw Error('INVALID_REVIEW_CHECKPOINT');
+      continue;
+    }
     if(['user_input','agent_response','finish'].includes(step?.step_type))continue;
     if(step?.step_type!=='tool'||!['finish',...readers].includes(step.tool_name))throw Error('REVIEW_TOOL_USE_FORBIDDEN');
     if(step.tool_name==='finish')continue;
@@ -3634,7 +3639,7 @@ async function emailRegressionChecks(){
  await check('E13',async()=>{for(const status of [429,503]){let count=0,delays=[];await a.rejects(()=>emailRequest('mock',{},async()=>{count++;return response(status,{});},async ms=>delays.push(ms)));a.equal(count,3);a.deepEqual(delays,[100,200]);}});
  await check('E14',async()=>{let count=0;await a.rejects(()=>emailRequest('mock',{},async(u,o)=>{count++;return new Promise((resolve,reject)=>o.signal.addEventListener('abort',()=>reject(Error('abort'))));},async()=>{},2));a.equal(count,3);});
  await check('E15',()=>{a.equal(EMAIL_SCOPE,'https://www.googleapis.com/auth/gmail.readonly');a(emailSync.toString().includes('format=metadata'));a(!emailSync.toString().includes("method:'POST'"));});
- const p={state:'s'.repeat(43),verifier:'v'.repeat(43),attemptId:crypto.randomUUID(),port:12345,redirectUri:'http://127.0.0.1:12345',createdAt:Date.now(),expiresAt:Date.now()+180000},req={method:'GET',url:'/?state='+p.state+'&code=fixture',socket:{remoteAddress:'127.0.0.1'},headers:{host:'127.0.0.1:12345'}};
+ const fixtureCreatedAt=Date.now(); const p={state:'s'.repeat(43),verifier:'v'.repeat(43),attemptId:crypto.randomUUID(),port:12345,redirectUri:'http://127.0.0.1:12345',createdAt:fixtureCreatedAt,expiresAt:fixtureCreatedAt+180000},req={method:'GET',url:'/?state='+p.state+'&code=fixture',socket:{remoteAddress:'127.0.0.1'},headers:{host:'127.0.0.1:12345'}};
  await check('E16',()=>a.throws(()=>emailCallbackValidate({...req,url:'/?state=bad&code=x'},p)));
  await check('SECRET_CONFIG',async()=>{
  const id='fixture12345.apps.googleusercontent.com',other='otherclient123.apps.googleusercontent.com';
@@ -4079,6 +4084,8 @@ async function test(name,fn){try{await fn();checks.push({name,passed:true});}cat
 function fixture(){const values=new Map(),io={read:id=>values.has(id)?structuredClone(values.get(id)):null,write:(id,value)=>values.set(id,structuredClone(value)),list:()=>[...values.keys()]};return {repo:conversationRepository(io),values};}
 async function conversationRegressionChecks(){
 const assert=require('node:assert/strict'),m=module.exports;checks.length=0;
+ await test('Checkpoint metadata accepted but tools and extra payload rejected',()=>{const result={event:'result',result:{status:'SUCCESS',num_turns:1,structured_output:{answer:'ok'}}},meta={event:'step_update',step_update:{conversation_id:'37420f05-5545-4d8b-a91f-87d44023533e',step_index:1,state:'DONE',step_type:'checkpoint',duration_seconds:1}},parse=entry=>parseNativeReviewStream(JSON.stringify(entry)+'\n'+JSON.stringify(result),[]);assert.equal(parse(meta).answer,'ok');for(const extra of [{tool_name:'shell'},{payload:{}},{state:'RUNNING'}])assert.throws(()=>parse({...meta,step_update:{...meta.step_update,...extra}}));assert.throws(()=>parse({event:'step_update',step_update:{step_type:'tool',tool_name:'shell'}}));});
+ await test('OAuth test fixture captures one timestamp',()=>{const source=fs.readFileSync(__filename,'utf8');assert(!source.includes('createdAt:Date.now(),'+'expiresAt:Date.now()+180000'));assert(source.includes('createdAt:fixtureCreatedAt,expiresAt:fixtureCreatedAt+180000'));});
  await test('Persistent turns are idempotent and conflicting retries fail closed',()=>{const {repo}=fixture(),doc=repo.create(),request={id:crypto.randomUUID(),text:'Preferisco risposte brevi',topic:'auto',mode:'smart'};assert(!repo.reserve(doc.id,request).duplicate);assert(repo.reserve(doc.id,request).duplicate);assert.equal(repo.get(doc.id).turns.length,1);assert.throws(()=>repo.reserve(doc.id,{...request,text:'altro'}),{status:409});assert.throws(()=>repo.reserve(doc.id,{...request,id:crypto.randomUUID()}),{status:409});});
  await test('Invalid stored documents preserved',()=>{const {repo,values}=fixture(),doc=repo.create();values.set(doc.id,{schema:999,id:doc.id});assert.throws(()=>repo.get(doc.id),{status:409});assert.equal(values.get(doc.id).schema,999);assert.throws(()=>repo.get('../outside'),{status:400});});
  await test('Cancelled answer cannot overwrite cancellation',()=>{const {repo}=fixture(),doc=repo.create(),id=crypto.randomUUID();repo.reserve(doc.id,{id,text:'Ciao',topic:'auto',mode:'smart'});repo.update(doc.id,id,{status:'cancelled'});repo.update(doc.id,id,{status:'completed',answer:'late'});assert.equal(repo.get(doc.id).turns[0].status,'cancelled');assert.equal(repo.get(doc.id).turns[0].answer,null);});
