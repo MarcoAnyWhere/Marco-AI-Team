@@ -3,7 +3,7 @@
 Runtime locale multi-agent a zero costi variabili.
 
 ## Versione corrente
-3.3.32 (staging)
+3.3.33 (staging)
 
 OAuth Gmail Desktop: campo password Client secret, mai precompilato o restituito dalle
 API; lo stato espone solo `clientSecretConfigured`. Un campo vuoto conserva il secret
@@ -411,3 +411,15 @@ Limiti: prove simulate non sostituiscono avvio lento reale Windows, review indip
 Prove P2: `node server.js --p2-test` verifica i contratti con storage isolato in memoria; non sostituisce `--release-controller-test`, che prova anche il commit nativo Windows. Nel DEV il gate disco è bloccato da `spawnSync powershell.exe EPERM` al T01: limite harness/ambiente, non prova di difetto prodotto né autorizzazione a replacement candidate. Le suite lineage (11), safety (13) e Work V2 sono state eseguite.
 
 La cronologia conserva i limiti esistenti: fino a 100 documenti run, ultime 30 voci esposte e 8 mostrate nel pannello. Il recupero non riprende automaticamente processi interrotti. Cinque contratti P2 passati; versione assegnata dal percorso nativo senza modifica manuale nel DEV.
+
+## Conversazione personale (3.3.33)
+
+Chat centrale con conversazioni salvate localmente in data/conversations; contesto esplicito e modificabile in data/personal-context.json. Il motore riceve il contesto, gli ultimi otto scambi e fino a tre richiami pertinenti precedenti: nessuna promessa di memoria illimitata o identica qualità fra fornitori. Il cambio Codex/Gemini conserva il contesto. Solo l'opzione Automatico può cambiare fornitore dopo un errore positivo di quota, autenticazione o indisponibilità; massimo un passaggio, nessuna API a consumo. Il modello locale viene usato solo su scelta esplicita.
+
+Quote Codex reali tramite app-server account/rateLimits/read, cache di 60 secondi. Gemini indica dato non leggibile: /usage nella CLI non fornisce un'interfaccia automatica verificata. Nessuna percentuale Gemini inventata.
+
+Microfono: dettatura locale se supportata dal browser e con pacchetto italiano già disponibile. Altrimenti viene indicata la scorciatoia Win + H; il testo è modificabile prima dell'invio. La cattura reale richiede il permesso del browser e non è certificata dai test automatici. Nessun caricamento automatico dell'audio a un servizio cloud.
+
+Le funzioni di sviluppo, rilascio, email e ricerca dettagliata rimangono in Operazioni avanzate. La chat ordinaria produce testo e non avvia DEV/Apply/Publish. Ricerca lavoro in chat: «Cerca offerte secondo il mio profilo». Per criteri diversi aggiornare prima Profilo lavoro; le richieste non riconosciute chiedono di specificarlo anziché ignorare i vincoli. La copertura è limitata ai feed configurati: sono visibili esclusioni per ruolo, località e RAL, e board non configurati. Zero risultati non significa assenza di opportunità sul mercato.
+
+Stabilità: identificativi di invio idempotenti, nessuna ripetizione automatica dei turni interrotti, errori tipizzati, conservazione delle etichette dei ruoli nella traccia, test della UI basato sulla dicitura di sicurezza corrente. I gate nativi di rilascio restano obbligatori.

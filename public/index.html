@@ -249,7 +249,7 @@ let liveJobs=[];
 function showJobReport(x) {
   liveJobs=x.jobs;
   $('#liveJobsBox').classList.remove('hidden');
-  $('#jobsSummary').textContent=(x.archiveCount||x.jobs.length)+' in archivio / '+x.totalFound+' offerte trovate · '+x.newCount+' nuove · aggiornamento '+new Date(x.updatedAt).toLocaleString()+' · '+Object.entries(x.sources).map(([s,v])=>s+': '+(v.ok?'riuscita'+(v.cached?' (cache)':''):'fallita')).join(' · ');
+  $('#jobsSummary').textContent=(x.coverageWarning?x.coverageWarning+' ':'')+(x.archiveCount||x.jobs.length)+' in archivio / '+x.totalFound+' offerte trovate · '+x.newCount+' nuove · aggiornamento '+new Date(x.updatedAt).toLocaleString()+' · '+Object.entries(x.sources).map(([s,v])=>s+': '+(v.status==='not_configured'?'non configurata':v.ok?'riuscita'+(v.cached?' (cache)':''):'non disponibile')+' · '+v.retrieved+' recuperate / '+v.used+' compatibili'+(v.rejected?' · escluse: ruolo '+v.rejected.role+', sede '+v.rejected.geography+', RAL '+v.rejected.salary:'')).join(' · ');
   $('#jobsTrace').innerHTML=x.trace.map(t=>'<pre>'+esc(t.agent)+' — '+esc(t.status)+'\n'+esc(t.result)+'</pre>').join('');
   renderLiveJobs();
 }
@@ -534,6 +534,72 @@ $('#emailSaveSupervisor').onclick=()=>emailAction(()=>emailApi('reporting',{supe
  $('#emailSync').onclick=()=>emailAction(()=>emailApi('sync',{}));
 $('#emailReload').onclick=()=>emailAction(async()=>{});
 emailRefresh().catch(e=>$('#emailStatus').textContent=e.message);
+</script>
+<script>
+// The existing operations remain accessible under Advanced; conversation has its own API.
+(()=>{
+ const root=document.querySelector('.wrap'),composer=document.querySelector('#task').parentElement;
+ const advanced=document.createElement('details');advanced.id='advancedOperations';
+ const summary=document.createElement('summary');summary.textContent='Operazioni avanzate e impostazioni';advanced.append(summary);
+ for(const child of [...root.children])if(child.tagName!=='HEADER'&&child!==composer)advanced.append(child);
+ const oldRow=document.querySelector('#go').parentElement;composer.removeChild(oldRow);advanced.prepend(oldRow);
+ for(const id of ['workTools','devTools']){const el=document.getElementById(id);advanced.append(el);}
+ root.append(advanced);
+ const emailHeading=[...document.querySelectorAll('h2')].find(el=>el.textContent.includes('Email / Event'));
+ if(emailHeading)advanced.append(emailHeading.parentElement);
+ root.querySelector('header .muted').textContent='Una conversazione, il tuo contesto, il motore più adatto.';
+ document.querySelector('#go').textContent='Esegui operazione avanzata';
+ const panel=document.createElement('section');panel.innerHTML=`
+ <div class="row"><button class="secondary" id="newConversation">Nuova chat</button><select id="conversationList" aria-label="Conversazioni recenti"><option value="">Conversazioni recenti</option></select></div>
+ <div id="conversationMessages" role="log" aria-live="polite" style="margin:20px 0;max-height:60vh;overflow:auto"></div>
+ <div id="conversationNotice" class="muted" role="status"></div>`;
+ composer.prepend(panel);
+ const controls=document.createElement('div');controls.innerHTML=`
+ <div class="row"><button id="sendConversation">Invia</button><button class="secondary" id="dictateConversation">Microfono</button><button class="secondary hidden" id="cancelConversation">Interrompi</button>
+ <select id="conversationTopic" aria-label="Ambito"><option value="auto">Ambito automatico</option><option value="general">Generale</option><option value="work">Lavoro</option><option value="teaching">Didattica</option><option value="documents">Documenti</option><option value="development">Sviluppo</option></select>
+ <select id="conversationMode" aria-label="Motore"><option value="smart">Automatico · qualità</option><option value="codex">Codex</option><option value="gemini">Gemini</option><option value="local">Locale</option></select></div>
+ <div class="muted" id="dictationStatus" role="status"></div>
+ <div id="conversationQuotas" class="muted" role="status" style="margin-top:12px">Lettura delle quote…</div><button class="secondary" id="refreshConversationQuota">Aggiorna quote</button>
+ <details><summary>Il tuo contesto personale</summary><p class="muted">Scrivi preferenze, obiettivi e informazioni utili. Restano su questo PC e vengono inclusi nelle richieste al motore scelto. Non inserire password o credenziali. Le chat salvate usano gli ultimi scambi e alcuni richiami pertinenti; la memoria non è illimitata.</p>
+ <textarea id="personalConversationContext" maxlength="4000" placeholder="Come preferisci lavorare, obiettivi e informazioni che vuoi ricordare…"></textarea><button id="saveConversationContext">Salva contesto</button><span class="muted" id="conversationContextStatus" role="status"></span></details>`;
+ composer.append(controls);
+ const q=id=>document.getElementById(id);let current=null,busy=null,polling=false;
+ const notice=message=>q('conversationNotice').textContent=message;
+ async function api(route,body){const response=await fetch('/api/conversation/'+route,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const value=await response.json();if(!response.ok)throw Error(value.error||'Conversazione non disponibile.');return value;}
+ function remember(id){try{localStorage.setItem('marcoConversationId',id);}catch{}}
+ function render(doc){current=doc.id;remember(current);q('conversationList').value=current;q('conversationMessages').replaceChildren();busy=null;
+  for(const turn of doc.turns){const item=document.createElement('article');item.className='item';const user=document.createElement('p');user.textContent='Tu · '+turn.text;const answer=document.createElement('div');answer.style.whiteSpace='pre-wrap';answer.textContent=turn.answer||turn.error?.message||(turn.status==='running'?'Risposta in preparazione…':turn.status==='cancelled'?'Risposta interrotta.':'Risposta non disponibile.');const meta=document.createElement('p');meta.className='route';meta.textContent=[turn.engine,turn.topic,turn.routeReason].filter(Boolean).join(' · ');item.append(user,answer,meta);q('conversationMessages').append(item);if(turn.status==='running')busy=turn.id;}
+  q('sendConversation').disabled=!!busy;q('cancelConversation').classList.toggle('hidden',!busy);
+ }
+ async function list(){const value=await api('threads');const select=q('conversationList');select.replaceChildren(new Option('Conversazioni recenti',''));for(const item of value.threads)select.add(new Option(item.title,item.id));select.value=current||'';}
+ async function poll(){if(polling||!current)return;polling=true;try{render(await api('threads/'+current));}catch(error){notice(error.message);}finally{polling=false;}if(busy)setTimeout(poll,1500);}
+ async function fresh(){if(busy){notice('Interrompi la risposta prima di aprire una nuova chat.');return;}const doc=await api('threads',{});render(doc);await list();notice('');}
+ q('newConversation').onclick=()=>fresh().catch(e=>notice(e.message));
+ q('conversationList').onchange=async()=>{if(!q('conversationList').value)return;current=q('conversationList').value;await poll();};
+ let pendingSend=null;
+ q('sendConversation').onclick=async()=>{if(busy||q('sendConversation').disabled)return;const text=q('task').value.trim();if(!text)return;
+  q('sendConversation').disabled=true;notice('');
+  try{if(!current){const doc=await api('threads',{});current=doc.id;remember(current);}const signature=JSON.stringify([current,text,q('conversationTopic').value,q('conversationMode').value]);if(!pendingSend||pendingSend.signature!==signature)pendingSend={signature,id:crypto.randomUUID()};
+   const value=await api('turn',{threadId:current,id:pendingSend.id,text,topic:q('conversationTopic').value,mode:q('conversationMode').value});pendingSend=null;q('task').value='';busy=value.turn.status==='running'?value.turn.id:null;await poll();await list();
+  }catch(error){notice(error.message+' Se la richiesta è stata ricevuta, ripremere Invia recupera lo stesso messaggio.');q('sendConversation').disabled=false;}
+ };
+ q('cancelConversation').onclick=async()=>{try{await api('cancel',{threadId:current,id:busy});await poll();}catch(error){notice(error.message);}};
+ q('task').addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();q('sendConversation').click();}});
+ q('saveConversationContext').onclick=async()=>{try{await api('context',{text:q('personalConversationContext').value});q('conversationContextStatus').textContent='Contesto salvato.';}catch(error){q('conversationContextStatus').textContent=error.message;}};
+ async function quota(){try{const value=await api('quota');const c=value.codex;q('conversationQuotas').textContent='Codex: '+(c.status==='available'?c.windows.map(w=>Math.round(w.remainingPercent)+'% restante / '+(w.durationMins<1440?Math.round(w.durationMins/60)+' ore':Math.round(w.durationMins/1440)+' giorni')+(w.resetsAt?' · ripristino '+new Date(w.resetsAt*1000).toLocaleString('it-IT'):'')).join(' | '):'quota non leggibile')+'. Gemini: quota non leggibile automaticamente; consultabile con /usage nella sua CLI. Rilevazione '+new Date(value.updatedAt).toLocaleTimeString('it-IT')+'.';}catch(error){q('conversationQuotas').textContent=error.message;}}
+ q('refreshConversationQuota').onclick=()=>quota();
+ const Speech=window.SpeechRecognition||window.webkitSpeechRecognition;let recognition=null;
+ q('dictateConversation').onclick=async()=>{try{
+  if(recognition){recognition.stop();return;}
+  if(!Speech||!('processLocally' in Speech.prototype)||typeof Speech.available!=='function')throw Error('Dettatura locale non supportata da questo browser. Puoi usare la dettatura di Windows (Win + H) nel campo di testo.');
+  const available=await Speech.available({langs:['it-IT'],processLocally:true});if(available!=='available')throw Error('Il pacchetto vocale italiano locale non è disponibile. Usa Win + H nel campo di testo.');
+  recognition=new Speech();recognition.lang='it-IT';recognition.processLocally=true;recognition.continuous=true;recognition.interimResults=false;
+  recognition.onresult=event=>{for(let i=event.resultIndex;i<event.results.length;i++)if(event.results[i].isFinal)q('task').value+=(q('task').value?' ':'')+event.results[i][0].transcript;};
+  recognition.onerror=()=>{q('dictationStatus').textContent='Dettatura non disponibile o permesso microfono negato.';};recognition.onend=()=>{recognition=null;q('dictateConversation').textContent='Microfono';};recognition.start();q('dictateConversation').textContent='Ferma microfono';q('dictationStatus').textContent='Dettatura sul dispositivo. Il testo resta modificabile e viene inviato solo premendo Invia.';
+ }catch(error){recognition=null;q('dictationStatus').textContent=error.message;}};
+ (async()=>{const context=await api('context');q('personalConversationContext').value=context.text;await list();let saved;try{saved=localStorage.getItem('marcoConversationId');}catch{}if(saved){current=saved;await poll();}})().catch(e=>notice(e.message));quota();
+})();
+
 </script>
 </body>
 </html>
